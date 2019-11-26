@@ -129,41 +129,41 @@ type Project (projectFile, onChange: ProjectFilePath -> unit) =
         loop (lwt, state)
 
     ///File System Watcher for `fsproj` file
-    let fsw =
+    let projFsw =
         new FileSystemWatcher(
             Path = Path.GetDirectoryName fullPath,
             Filter = Path.GetFileName fullPath,
             NotifyFilter = NotifyFilters.LastWrite)
 
-    do fsw.Changed.Add (fun _ -> agent.Post (Changed (File.GetLastWriteTimeUtc projectFile)))
-    do fsw.EnableRaisingEvents <- true
+    let projChangeSub = projFsw.Changed.Subscribe (fun _ -> agent.Post (Changed (File.GetLastWriteTimeUtc projectFile)))
+    do projFsw.EnableRaisingEvents <- true
 
     do
         if projectAssetsFile |> Path.GetDirectoryName |> Directory.Exists |> not then
             projectAssetsFile |> Path.GetDirectoryName |> Directory.CreateDirectory |> ignore
 
-    ///File System Watcher for `obj` dir, at the moment only `project.assets.json` and `*.props`
-    let afsw =
+    /// File System Watcher for `obj` dir, at the moment only `project.assets.json` and `*.props`
+    /// The API doesn't allow for a filter of `project.assets.json|*.props`, and it's less efficient
+    /// to have multiple watchers (ties us more physical system resources), so we make one watcher with a
+    /// catch-all filter and map out the files we want
+    let objDirWatcher =
         new FileSystemWatcher(
             Path = Path.GetDirectoryName projectAssetsFile,
-            Filter = Path.GetFileName projectAssetsFile)
+            NotifyFilter = (NotifyFilters.LastWrite ||| NotifyFilters.LastAccess ||| NotifyFilters.FileName ||| NotifyFilters.DirectoryName))
+    let isInterestingPath (args: FileSystemEventArgs) = args.Name = "project.assets.json" || args.Name.EndsWith ".props"
+    let objDirChangeSub = objDirWatcher.Changed |> Event.filter isInterestingPath |> Observable.subscribe (fun args -> agent.Post (Changed (File.GetLastWriteTimeUtc args.FullPath)))
+    let objDirCreateSub = objDirWatcher.Created |> Event.filter isInterestingPath |> Observable.subscribe (fun args -> agent.Post (Changed (File.GetLastWriteTimeUtc args.FullPath)))
+    let objDirDeleteSub = objDirWatcher.Deleted |> Observable.subscribe (fun _ -> agent.Post (Changed (DateTime.UtcNow)))
 
-    do afsw.Changed.Add (fun _ -> agent.Post (Changed (File.GetLastWriteTimeUtc projectAssetsFile)))
-    do afsw.Created.Add (fun _ -> agent.Post (Changed (File.GetLastWriteTimeUtc projectAssetsFile)))
-    do afsw.Deleted.Add (fun _ -> agent.Post (Changed (DateTime.UtcNow)))
+    let disposals =
+        [ projChangeSub
+          projFsw :> IDisposable
+          objDirChangeSub
+          objDirCreateSub
+          objDirDeleteSub
+          objDirWatcher :> IDisposable ]
 
-    do afsw.EnableRaisingEvents <- true
-
-    let propsfsw =
-        new FileSystemWatcher(
-            Path = objFolder,
-            Filter = projectProps)
-
-    do propsfsw.Changed.Add (fun x -> agent.Post (Changed (File.GetLastWriteTimeUtc x.FullPath)))
-    do propsfsw.Created.Add (fun x -> agent.Post (Changed (File.GetLastWriteTimeUtc x.FullPath)))
-    do propsfsw.Deleted.Add (fun _ -> agent.Post (Changed (DateTime.UtcNow)))
-
-    do propsfsw.EnableRaisingEvents <- true
+    do objDirWatcher.EnableRaisingEvents <- true
 
     member __.Response with get() = agent.PostAndReply GetResponse
                         and set r = agent.Post (SetResponse r)
@@ -172,6 +172,5 @@ type Project (projectFile, onChange: ProjectFilePath -> unit) =
 
     interface IDisposable with
         member __.Dispose() =
-            propsfsw.Dispose()
-            afsw.Dispose()
-            fsw.Dispose()
+          for disposal in disposals do
+            disposal.Dispose()
