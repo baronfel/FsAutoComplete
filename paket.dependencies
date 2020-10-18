@@ -3,6 +3,7 @@ version 5.241.6
 framework: netstandard2.0, netcoreapp2.1
 
 source https://api.nuget.org/v3/index.json
+source https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-tools/nuget/v3/index.json
 
 storage: none
 
@@ -11,7 +12,7 @@ github TheAngryByrd/FsLibLog:f81cba440bf0476bb4e2262b57a067a0d6ab78a7 src/FsLibL
 nuget Argu ~> 5.2.0
 nuget Fantomas ~> 4.0
 nuget Fantomas.Extras ~> 4.0
-nuget FSharp.Compiler.Service ~> 37.0
+nuget FSharp.Compiler.Service prerelease
 nuget Dotnet.ProjInfo.Workspace.FCS ~> 0.44.0
 nuget FSharp.Analyzers.SDK
 nuget FSharp.Data 3.0.1
@@ -21,7 +22,7 @@ nuget Mono.Cecil >= 0.10.0-beta7
 nuget Newtonsoft.Json
 nuget Fake.Runtime prerelease
 nuget FSharpLint.Core
-nuget FSharp.Core redirects:force
+nuget FSharp.Core prerelease redirects:force
 nuget Dapper
 nuget Microsoft.Data.Sqlite 2.2.4
 nuget Microsoft.Data.Sqlite.Core 2.2.4
@@ -61,9 +62,11 @@ group Build
 
 group Test
   framework: netstandard2.0, netcoreapp2.1, netcoreapp3.1
+  source https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-tools/nuget/v3/index.json
   source https://api.nuget.org/v3/index.json
   storage: none
 
+  nuget FSharp.Core prerelease redirects:force
   nuget NUnit 3.10.1
   nuget NUnit3TestAdapter 3.10.0
   nuget Microsoft.NET.Test.Sdk 15.8.0

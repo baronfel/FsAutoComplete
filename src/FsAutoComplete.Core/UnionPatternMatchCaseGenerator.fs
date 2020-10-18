@@ -165,7 +165,7 @@ let private tryFindPatternMatchExprInParsedInput (pos: pos) (parsedInput: Parsed
             | SynExpr.New(_, _, synExpr, _)
             | SynExpr.ArrayOrListOfSeqExpr(_, synExpr, _)
             | SynExpr.CompExpr(_, _, synExpr, _)
-            | SynExpr.Lambda(_, _, _, synExpr, _)
+            | SynExpr.Lambda(_, _, _, synExpr, _, _)
             | SynExpr.Lazy(synExpr, _)
             | SynExpr.Do(synExpr, _)
             | SynExpr.Assert(synExpr, _) ->
