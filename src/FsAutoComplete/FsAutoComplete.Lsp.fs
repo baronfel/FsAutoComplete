@@ -107,9 +107,9 @@ type FsharpLspServer(commands: Commands, lspClient: FSharpLspClient) =
                         do! (commands.Parse filePath content version (Some tfmConfig) |> Async.Ignore)
 
                         if config.Linter then do! (commands.Lint filePath |> Async.Ignore)
-                        if config.UnusedOpensAnalyzer then do! (commands.GetUnusedOpens filePath |> Async.Ignore)
-                        if config.UnusedDeclarationsAnalyzer then do! (commands.GetUnusedDeclarations filePath |> Async.Ignore)
-                        if config.SimplifyNameAnalyzer then do! (commands.GetSimplifiedNames filePath |> Async.Ignore)
+                        if config.UnusedOpensAnalyzer then  Async.Start (commands.GetUnusedOpens filePath |> Async.Ignore)
+                        if config.UnusedDeclarationsAnalyzer then Async.Start (async { ignore (commands.GetUnusedDeclarations filePath) }) //fire and forget this analyzer now that it's syncronous
+                        if config.SimplifyNameAnalyzer then Async.Start (commands.GetSimplifiedNames filePath |> Async.Ignore)
                     else
                         logger.warn (Log.setMessage "ParseFile - Parse not started, received partial change")
                 | _ ->
@@ -614,9 +614,9 @@ type FsharpLspServer(commands: Commands, lspClient: FSharpLspClient) =
         do! (commands.Parse filePath content doc.Version (Some tfmConfig) |> Async.Ignore)
 
         if config.Linter then do! (commands.Lint filePath |> Async.Ignore)
-        if config.UnusedOpensAnalyzer then do! (commands.GetUnusedOpens filePath |> Async.Ignore)
-        if config.UnusedDeclarationsAnalyzer then do! (commands.GetUnusedDeclarations filePath |> Async.Ignore)
-        if config.SimplifyNameAnalyzer then do! (commands.GetSimplifiedNames filePath |> Async.Ignore)
+        if config.UnusedOpensAnalyzer then Async.Start (commands.GetUnusedOpens filePath |> Async.Ignore)
+        if config.UnusedDeclarationsAnalyzer then Async.Start (async { ignore (commands.GetUnusedDeclarations filePath) })
+        if config.SimplifyNameAnalyzer then Async.Start (commands.GetSimplifiedNames filePath |> Async.Ignore)
     }
 
     override __.TextDocumentDidChange(p) = async {
@@ -687,7 +687,7 @@ type FsharpLspServer(commands: Commands, lspClient: FSharpLspClient) =
                           logger.info (Log.setMessage "TextDocumentCompletion - no type check results")
                           return LspResult.internalError "no type check results"
                         | Some tyRes ->
-                            let! res = commands.Completion tyRes pos lineStr lines file None (config.KeywordsAutocomplete) (config.ExternalAutocomplete)
+                            let res = commands.Completion tyRes pos lineStr lines file None (config.KeywordsAutocomplete) (config.ExternalAutocomplete)
                             let res =
                                 match res with
                                 | CoreResponse.Res(decls, keywords) ->
@@ -724,7 +724,7 @@ type FsharpLspServer(commands: Commands, lspClient: FSharpLspClient) =
 
     override __.CompletionItemResolve(ci) = async {
         logger.info (Log.setMessage "CompletionItemResolve Request: {parms}" >> Log.addContextDestructured "parms" ci )
-        let! res = commands.Helptext ci.InsertText.Value
+        let res = commands.Helptext ci.InsertText.Value
         let res =
             match res with
             | CoreResponse.InfoRes msg | CoreResponse.ErrorRes msg ->
@@ -745,7 +745,7 @@ type FsharpLspServer(commands: Commands, lspClient: FSharpLspClient) =
         p |> x.positionHandlerWithLatest (fun p pos tyRes lineStr lines ->
             async {
                 let pos' = FcsRange.Pos.fromZ p.Position.Line p.Position.Character
-                let! res = commands.Methods tyRes pos' lines
+                let res = commands.Methods tyRes pos' lines
                 let res =
                     match res with
                     | CoreResponse.InfoRes msg | CoreResponse.ErrorRes msg ->
@@ -783,7 +783,7 @@ type FsharpLspServer(commands: Commands, lspClient: FSharpLspClient) =
         logger.info (Log.setMessage "TextDocumentHover Request: {parms}" >> Log.addContextDestructured "parms" p )
         p |> x.positionHandler (fun p pos tyRes lineStr lines ->
             async {
-                let! res = commands.ToolTip tyRes pos lineStr
+                let res = commands.ToolTip tyRes pos lineStr
                 let res =
                     match res with
                     | CoreResponse.InfoRes msg | CoreResponse.ErrorRes msg ->
@@ -965,7 +965,7 @@ type FsharpLspServer(commands: Commands, lspClient: FSharpLspClient) =
         logger.info (Log.setMessage "TextDocumentDocumentHighlight Request: {parms}" >> Log.addContextDestructured "parms" p )
         p |> x.positionHandler (fun p pos tyRes lineStr lines ->
             async {
-                let! res = commands.SymbolUse tyRes pos lineStr
+                let res = commands.SymbolUse tyRes pos lineStr
                 let res =
                     match res with
                     | CoreResponse.InfoRes msg | CoreResponse.ErrorRes msg ->
@@ -1535,7 +1535,7 @@ type FsharpLspServer(commands: Commands, lspClient: FSharpLspClient) =
         handler (fun p pos tyRes lineStr typ file ->
             async {
                 if typ = "signature" then
-                    let! res = commands.SignatureData tyRes pos lineStr
+                    let res = commands.SignatureData tyRes pos lineStr
                     let res =
                         match res with
                         | CoreResponse.InfoRes msg | CoreResponse.ErrorRes msg ->
@@ -1658,7 +1658,7 @@ type FsharpLspServer(commands: Commands, lspClient: FSharpLspClient) =
 
         p |> x.positionHandler (fun p pos tyRes lineStr lines ->
             async {
-                let! res = commands.Typesig tyRes pos lineStr
+                let res = commands.Typesig tyRes pos lineStr
                 let res =
                     match res with
                     | CoreResponse.InfoRes msg | CoreResponse.ErrorRes msg ->
@@ -1706,7 +1706,7 @@ type FsharpLspServer(commands: Commands, lspClient: FSharpLspClient) =
 
         p |> handler (fun p pos tyRes lineStr ->
             async {
-                let! res = commands.SignatureData tyRes pos lineStr
+                let res = commands.SignatureData tyRes pos lineStr
                 let res =
                     match res with
                     | CoreResponse.InfoRes msg | CoreResponse.ErrorRes msg ->
@@ -1724,7 +1724,7 @@ type FsharpLspServer(commands: Commands, lspClient: FSharpLspClient) =
 
         p |> x.positionHandler (fun p pos tyRes lineStr lines ->
             async {
-                let! res = commands.SignatureData tyRes pos lineStr
+                let res = commands.SignatureData tyRes pos lineStr
                 let res =
                     match res with
                     | CoreResponse.InfoRes msg | CoreResponse.ErrorRes msg ->
@@ -1757,7 +1757,7 @@ type FsharpLspServer(commands: Commands, lspClient: FSharpLspClient) =
 
         p |> x.positionHandler (fun p pos tyRes lineStr lines ->
             async {
-                let! res = commands.SignatureData tyRes pos lineStr
+                let res = commands.SignatureData tyRes pos lineStr
                 let res =
                     match res with
                     | CoreResponse.InfoRes msg | CoreResponse.ErrorRes msg ->
@@ -1897,7 +1897,7 @@ type FsharpLspServer(commands: Commands, lspClient: FSharpLspClient) =
 
         p |> x.positionHandler (fun p pos tyRes lineStr lines ->
             async {
-                let! res = commands.Help tyRes pos lineStr
+                let res = commands.Help tyRes pos lineStr
                 let res =
                     match res with
                     | CoreResponse.InfoRes msg | CoreResponse.ErrorRes msg ->
@@ -1915,7 +1915,7 @@ type FsharpLspServer(commands: Commands, lspClient: FSharpLspClient) =
 
         p |> x.positionHandler (fun p pos tyRes lineStr lines ->
             async {
-                let! res = commands.FormattedDocumentation tyRes pos lineStr
+                let res = commands.FormattedDocumentation tyRes pos lineStr
                 let res =
                     match res with
                     | CoreResponse.InfoRes msg | CoreResponse.ErrorRes msg ->

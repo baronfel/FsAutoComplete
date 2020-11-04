@@ -574,12 +574,16 @@ let tryFindUnionDefinitionFromPos (codeGenService: CodeGenerationService) pos do
         let! patMatchExpr, insertionParams = tryFindCaseInsertionParamsAtPos codeGenService pos document
         let! symbol, symbolUse = codeGenService.GetSymbolAndUseAtPositionOfKind(document.FullName, pos, SymbolKind.Ident)
 
+
         let! superficialTypeDefinition =
-            match symbolUse.Symbol with
-            | SymbolPatterns.UnionCase(case) when case.ReturnType.HasTypeDefinition ->
-                Some case.ReturnType.TypeDefinition
-            | SymbolPatterns.FSharpEntity(entity, _, _) -> Some entity
-            | _ -> None
+            match symbolUse with
+            | Some symbol ->
+              match symbol.Symbol with
+              | SymbolPatterns.UnionCase(case) when case.ReturnType.HasTypeDefinition ->
+                  Some case.ReturnType.TypeDefinition
+              | SymbolPatterns.FSharpEntity(entity, _, _) -> Some entity
+              | _ -> None
+            | None -> None
 
         let! realTypeDefinition =
             match superficialTypeDefinition with

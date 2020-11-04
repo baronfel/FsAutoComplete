@@ -545,7 +545,7 @@ let tryFindRecordDefinitionFromPos (codeGenService: CodeGenerationService) (pos:
 
         let! symbol, symbolUse =
             codeGenService.GetSymbolAndUseAtPositionOfKind(document.FullName, pos, SymbolKind.Ident)
-
+        let! symbolUse = symbolUse
         match symbolUse.Symbol with
         | :? FSharpEntity as entity when entity.IsFSharpRecord && entity.DisplayName = symbol.Text ->
             return! Some (recordExpression, Some entity, insertionPos)

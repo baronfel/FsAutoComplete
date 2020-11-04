@@ -187,11 +187,8 @@ type BackgroundServiceServer(state: State, client: FsacClient) =
                     do! client.Notify {Value = sprintf "Typechecking aborted %s" file }
                     return ()
                 | FSharpCheckFileAnswer.Succeeded res ->
-                    async {
-                            let! symbols = res.GetAllUsesOfAllSymbolsInFile()
-                            SymbolCache.updateSymbols file symbols
-                            return ()
-                    } |> Async.Start
+                    let symbols = res.GetAllUsesOfAllSymbolsInFile()
+                    SymbolCache.updateSymbols file symbols
                     match ignoredFile with
                     | Some fn when fn = file -> return ()
                     | _ ->
@@ -208,11 +205,8 @@ type BackgroundServiceServer(state: State, client: FsacClient) =
                     do! client.Notify {Value = sprintf "Typechecking aborted %s" file }
                     return ()
                 | FSharpCheckFileAnswer.Succeeded res ->
-                    async {
-                            let! symbols = res.GetAllUsesOfAllSymbolsInFile()
-                            SymbolCache.updateSymbols file symbols
-                            return ()
-                    } |> Async.Start
+                    let symbols = res.GetAllUsesOfAllSymbolsInFile()
+                    SymbolCache.updateSymbols file symbols
                     match ignoredFile with
                     | Some fn when fn = file -> return ()
                     | _ ->
