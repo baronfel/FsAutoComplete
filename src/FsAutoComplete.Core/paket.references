@@ -14,6 +14,9 @@ System.Configuration.ConfigurationManager
 Fantomas
 Fantomas.Extras
 FSharp.UMX
+Microsoft.Build.Framework
+Microsoft.Build.Tasks.Core
+Microsoft.Build.Utilities.Core
 
 Microsoft.NETFramework.ReferenceAssemblies
 System.Reflection.Metadata

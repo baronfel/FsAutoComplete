@@ -39,6 +39,12 @@ nuget FSharp.Formatting
 nuget FSharp.Control.Reactive
 nuget FSharpx.Async
 
+# temp - FCS nuget didn't include these
+nuget Microsoft.Build.Framework ~> 16.6
+nuget Microsoft.Build.Tasks.Core ~> 16.6
+nuget Microsoft.Build.Utilities.Core ~> 16.6
+# temp
+
 nuget Microsoft.SourceLink.GitHub copy_local:true
 nuget Microsoft.NETFramework.ReferenceAssemblies 1.0.0
 nuget FSharp.DependencyManager.Nuget 37
