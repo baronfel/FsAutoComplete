@@ -10,6 +10,12 @@ open LanguageServerProtocol.Types
 open FsAutoComplete
 open FsAutoComplete.LspHelpers
 
+type Versioned<'t> = int * 't
+
+type ParseMap = Map<string, Versioned<Diagnostic []>>
+
+type LspServerEvents = Event<string*obj>
+
 type Async =
   /// Creates an asynchronous workflow that non-deterministically returns the
   /// result of one of the two specified workflows (the one that completes
@@ -231,34 +237,6 @@ let expectExitCodeZero (exitCode, _) =
   Expect.equal exitCode 0 (sprintf "expected exit code zero but was %i" exitCode)
 
 
-let serverInitialize path (config: FSharpConfigDto) =
-  dotnetCleanup path
-  let files = Directory.GetFiles(path)
-
-  if files |> Seq.exists (fun p -> p.EndsWith ".fsproj") then
-    runProcess (logDotnetRestore ("Restore" + path)) path "dotnet" "restore"
-    |> expectExitCodeZero
-
-  let server, event = createServer()
-
-  event.Publish
-  |> Event.add logEvent
-
-  let p : InitializeParams =
-    { ProcessId = Some 1
-      RootPath = Some path
-      RootUri = Some (sprintf "file://%s" path)
-      InitializationOptions = Some (Server.serialize config)
-      Capabilities = Some clientCaps
-      trace = None}
-
-  let result = server.Initialize p |> Async.RunSynchronously
-  match result with
-  | Result.Ok res ->
-    (server, event)
-  | Result.Error e ->
-    failwith "Initialization failed"
-
 let loadDocument path : TextDocumentItem =
   { Uri = Path.FilePathToUri path
     LanguageId = "fsharp"
@@ -303,13 +281,6 @@ let waitForWorkspaceFinishedParsing (event : Event<string * obj>) =
     | None ->
       logger.debug (eventX "Timeout waiting for workspace finished")
 
-//This is currently used for single tests, hence the naive implementation is working just fine.
-//Revisit if more tests will use this scenario.
-let mutable projectOptsList : FSharp.Compiler.SourceCodeServices.FSharpProjectOptions list = []
-let waitForScriptFilePropjectOptions (server: FsharpLspServer) =
-  server.ScriptFileProjectOptions
-  |> Event.add (fun n -> projectOptsList <- n::projectOptsList)
-
 let private typedEvents typ =
   Event.filter (fun (typ', _o) -> typ' = typ)
 
@@ -329,7 +300,7 @@ let private matchFiles (files: string Set) =
     else None
   )
 
-let private fileDiagnostics file (events: Event<string*obj>) =
+let private fileDiagnostics file (events: LspServerEvents) =
   logger.info (eventX "waiting for events on file {file}" >> setField "file" file)
   events.Publish
   |> getDiagnosticsEvents
@@ -337,32 +308,123 @@ let private fileDiagnostics file (events: Event<string*obj>) =
 
 let analyzerEvents file events =
   fileDiagnostics file events
-  |> Event.map snd
-  |> Event.filter (fun payload -> payload.Diagnostics |> Array.exists (fun d -> d.Source.StartsWith "F# Analyzers"))
+  |> Event.choose (fun ((_, payload) as evt) ->
+    if payload.Diagnostics |> Array.exists (fun d -> d.Source.StartsWith "F# Analyzers")
+    then Some evt
+    else None
+  )
 
-let waitForParseResultsForFile file (events: Event<string*obj>) =
-  let matchingFileEvents = fileDiagnostics file events
-  async {
-    let! (filename, args) = Async.AwaitEvent matchingFileEvents
-    match args.Diagnostics with
-    | [||] -> return Ok ()
-    | errors -> return Core.Result.Error errors
-  }
-  |> Async.RunSynchronously
-
-let inline waitForParsedScript (m: System.Threading.ManualResetEvent) (event: Event<string * obj>) =
+let waitForParsedScript (m: System.Threading.ManualResetEvent) (events: LspServerEvents) =
 
   let bag = new System.Collections.Concurrent.ConcurrentBag<LanguageServerProtocol.Types.PublishDiagnosticsParams>()
 
-  event.Publish
-  |> Event.filter (fun (typ, o) -> typ = "textDocument/publishDiagnostics")
-  |> Event.map (fun (typ, o) -> unbox<LanguageServerProtocol.Types.PublishDiagnosticsParams> o)
-  |> Event.filter (fun n ->
-    let filename = n.Uri.Replace('\\', '/').Split('/') |> Array.last
-    filename = "Script.fs")
-  |> Event.add (fun n ->
+  fileDiagnostics "Script.fs" events
+
+  |> Observable.add (fun (_, n) ->
     bag.Add(n)
     m.Set() |> ignore
   )
 
   bag
+
+type DiagnosticsVersion = Any | AtLeast of n: int
+
+type LspServerSession(server: FsharpLspServer, events: LspServerEvents) =
+  let mutable parsedFilesMap: ParseMap = Map.empty
+
+  let disposables = ResizeArray<IDisposable>()
+
+  do
+    // start tracking diagnostics events to populate the parsedFilesMap
+    disposables.Add(
+        events.Publish
+        |> getDiagnosticsEvents
+        |> Observable.subscribe (fun (diag: PublishDiagnosticsParams) ->
+            parsedFilesMap <-
+              Map.change diag.Uri (fun old ->
+                match old with
+                | None ->
+                  Some (0, diag.Diagnostics)
+                | Some (version, _diags) ->
+                  Some (version + 1, diag.Diagnostics)
+              ) parsedFilesMap
+        )
+    )
+    // log events overall
+    disposables.Add(events.Publish |> Observable.subscribe logEvent)
+
+  member _.Server = server
+  member _.Events = events
+
+  member _.WaitForParse (fileUri: DocumentUri, version: DiagnosticsVersion) =
+    let findEntry () =
+      match parsedFilesMap |> Map.tryFind fileUri, version with
+      | Some (_, diags), Any -> Some diags
+      | Some (v, diags), AtLeast n when v >= n -> Some diags
+      | _ -> None
+
+    let rec loop () =
+      async {
+        match findEntry () with
+        | Some [||] ->
+          return Ok ()
+        | Some diags ->
+          return Result.Error diags
+        | None ->
+          do! Async.Sleep (TimeSpan.FromMilliseconds 100.)
+          return! loop ()
+      }
+
+    loop ()
+
+  member _.AddDisposal disp = disposables.Add disp
+
+  interface IDisposable with
+    member _.Dispose () =
+      for disposable in disposables do
+        disposable.Dispose()
+
+//This is currently used for single tests, hence the naive implementation is working just fine.
+//Revisit if more tests will use this scenario.
+let mutable projectOptsList : FSharp.Compiler.SourceCodeServices.FSharpProjectOptions list = []
+
+let waitForScriptFileProjectOptions (session: LspServerSession) =
+  session.AddDisposal
+    (session.Server.ScriptFileProjectOptions
+     |> Observable.subscribe (fun n -> projectOptsList <- n::projectOptsList))
+
+let serverInitialize path (config: FSharpConfigDto) =
+  dotnetCleanup path
+
+  let files = Directory.GetFiles(path)
+
+  if files |> Seq.exists (fun p -> p.EndsWith ".fsproj") then
+    runProcess (logDotnetRestore ("Restore" + path)) path "dotnet" "restore"
+    |> expectExitCodeZero
+
+  let server, events = createServer()
+
+  let p : InitializeParams =
+    { ProcessId = Some 1
+      RootPath = Some path
+      RootUri = Some (sprintf "file://%s" path)
+      InitializationOptions = Some (Server.serialize config)
+      Capabilities = Some clientCaps
+      trace = None}
+
+  let session = new LspServerSession(server, events)
+  let result = server.Initialize p |> Async.RunSynchronously
+
+  match result with
+  | Result.Ok res ->
+    session
+  | Result.Error e ->
+    failwith "Initialization failed"
+
+
+let serverTest (sharedLazyState: Lazy<'a>) label f =
+  // we use testCaseAsync instead of testAsync because the testAsync CE doesn't have some syntax that the regular async CE does
+  testCaseAsync label (async {
+    let state = sharedLazyState.Value
+    return! f state
+  })
