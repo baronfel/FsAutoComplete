@@ -74,7 +74,7 @@ let basicTests =
   let basicTest = serverTest basicServer
 
   testSequenced <| testList "Basic Tests" [
-      testSequenced <| testList "Hover Tests" [
+      testSequenced <| ftestList "Hover Tests" [
 
         basicTest "simple symbol" (fun (session, path) -> async {
           let p : TextDocumentPositionParams =

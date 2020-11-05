@@ -155,37 +155,38 @@ type Commands<'analyzer> (serialize : Serializer, backgroundServiceEnabled) =
 
     let parseFilesInTheBackground fsiScriptTFM files =
         async {
-            files
-            |> List.toArray
-            |> Array.Parallel.iter (fun file ->
-                try
-                    let sourceOpt =
-                        match state.Files.TryFind file with
-                        | Some f -> Some (f.Lines)
-                        | None when File.Exists(file) ->
-                            let ctn = File.ReadAllLines file
-                            state.Files.[file] <- { Touched = DateTime.Now; Lines = ctn; Version = None }
-                            let payload =
-                                if Utils.isAScript file
-                                then BackgroundServices.ScriptFile(file, fsiScriptTFM)
-                                else BackgroundServices.SourceFile file
-                            if backgroundServiceEnabled then BackgroundServices.updateFile(payload, ctn |> String.concat "\n", 0)
-                            Some (ctn)
-                        | None -> None
-                    match sourceOpt with
-                    | None -> ()
-                    | Some source ->
-                        let opts = state.GetProjectOptions' file |> Utils.projectOptionsToParseOptions
-                        let parseRes = checker.ParseFile(file, source |> String.concat "\n", opts) |> Async.RunSynchronously
-                        fileParsed.Trigger parseRes
-                with
-                | :? System.Threading.ThreadAbortException as ex ->
-                    // on mono, if background parsing is aborted a ThreadAbortException
-                    // is raised, who can be ignored
-                    ()
-                | ex ->
-                    commandsLogger.error (Log.setMessage "Failed to parse file '{file}'" >> Log.addContextDestructured "file" file >> Log.addExn ex)
-            ) }
+          for file in files do
+            try
+                let sourceOpt =
+                    match state.Files.TryFind file with
+                    | Some f -> Some (f.Lines)
+                    | None when File.Exists(file) ->
+                        let ctn = File.ReadAllLines file
+                        state.Files.[file] <- { Touched = DateTime.Now; Lines = ctn; Version = None }
+                        let payload =
+                            if Utils.isAScript file
+                            then BackgroundServices.ScriptFile(file, fsiScriptTFM)
+                            else BackgroundServices.SourceFile file
+                        if backgroundServiceEnabled then BackgroundServices.updateFile(payload, ctn |> String.concat "\n", 0)
+                        Some (ctn)
+                    | None -> None
+                match sourceOpt with
+                | None -> ()
+                | Some source ->
+                    let opts = state.GetProjectOptions' file |> Utils.projectOptionsToParseOptions
+                    async {
+                      let! parseRes = checker.ParseFile(file, source |> String.concat "\n", opts)
+                      fileParsed.Trigger parseRes
+                    }
+                    |> Async.Start
+            with
+            | :? System.Threading.ThreadAbortException as ex ->
+                // on mono, if background parsing is aborted a ThreadAbortException
+                // is raised, who can be ignored
+                ()
+            | ex ->
+                commandsLogger.error (Log.setMessage "Failed to parse file '{file}'" >> Log.addContextDestructured "file" file >> Log.addExn ex)
+         }
 
     let calculateNamespaceInser (decl : FSharpDeclarationListItem) (pos : pos) getLine =
         let getLine i =
