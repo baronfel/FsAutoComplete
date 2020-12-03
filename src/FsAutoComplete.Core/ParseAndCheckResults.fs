@@ -2,6 +2,7 @@ namespace FsAutoComplete
 
 open System
 open System.IO
+open System.Text
 open FSharp.Compiler.SourceCodeServices
 open Utils
 open FSharp.Compiler.Range
@@ -12,6 +13,7 @@ open FsAutoComplete.Logging
 open FsAutoComplete.Utils
 open FSharp.UMX
 open FSharp.Compiler.SyntaxTree
+open FsToolkit.ErrorHandling
 
 [<RequireQualifiedAccess>]
 type FindDeclarationResult =
@@ -19,6 +21,22 @@ type FindDeclarationResult =
     | Range of FSharp.Compiler.Range.range
     /// The declaration refers to a file.
     | File of string
+
+module private Helpers =
+  let isStaticArgTip (pos: pos) (text: ISourceText) =
+    let parenLine, parenCol = pos.Line, pos.Column
+    if parenLine >= text.Length
+    then Error "line outside text"
+    else
+      let lineText = text.GetLineString parenLine
+      Ok(parenCol < lineText.Length && lineText.[parenCol] = '<')
+
+  let oneColBefore (pos: pos) =
+    mkPos (pos.Line) (pos.Column - 1)
+
+  let oneColAfter (pos: pos) =
+    mkPos (pos.Line) (pos.Column + 1)
+
 
 type ParseAndCheckResults
     (
@@ -29,42 +47,88 @@ type ParseAndCheckResults
 
   let logger = LogProvider.getLoggerByName "ParseAndCheckResults"
 
-  member __.TryGetMethodOverrides (lines: LineStr[]) (pos: pos) = async {
-    // Find the number of `,` in the current signature
-    let commas, _, _ =
-      let lineCutoff = pos.Line - 6
-      let rec prevPos (line,col) =
-        match line, col with
-        | 1, 1
-        | _ when line < lineCutoff -> 1, 1
-        | _, 1 ->
-           let prevLine = lines.[line - 2]
-           if prevLine.Length = 0 then prevPos(line-1, 1)
-           else line - 1, prevLine.Length
-        | _    -> line, col - 1
-
-      let rec loop commas depth (line, col) =
-        if (line,col) <= (1,1) then (0, line, col) else
-        let ch = lines.[line - 1].[col - 1]
-        let commas = if depth = 0 && ch = ',' then commas + 1 else commas
-        if (ch = '(' || ch = '{' || ch = '[') && depth > 0 then loop commas (depth - 1) (prevPos (line,col))
-        elif ch = ')' || ch = '}' || ch = ']' then loop commas (depth + 1) (prevPos (line,col))
-        elif ch = '(' || ch = '<' then commas, line, col
-        else loop commas depth (prevPos (line,col))
-      match loop 0 0 (prevPos(pos.Line, pos.Column)) with
-      | _, 1, 1 -> 0, pos.Line, pos.Column
-      | newPos -> newPos
+  member __.TryGetMethodOverrides (lines: ISourceText) (caretLinePos: pos) (triggeringChar: char option) (caretLineColumn: int) (caretPosition: int) = asyncResult {
+    /// ensures that a pos is 'capped' to the end of the document in the worst case
+    let posToLinePosition (pos: pos) =
+      let posTup = pos.Line, pos.Column
+      let (lastLine, lastColumn) as lastPosInDocument = lines.GetLastCharacterPosition()
+      if lastPosInDocument > posTup then pos else mkPos lastLine lastColumn
 
     // Get the parameter locations
-    let paramLocations = parseResults.FindNoteworthyParamInfoLocations pos
+    let paramLocations = parseResults.FindNoteworthyParamInfoLocations caretLinePos
     match paramLocations with
     | None ->
-      return ResultOrString.Error "Could not find parameter locations"
-    | Some nwpl ->
-      let names = nwpl.LongId
-      let lidEnd = nwpl.LongIdEndLocation
-      let! meth = checkResults.GetMethods(lidEnd.Line, lidEnd.Column, "", Some names)
-      return Ok(meth, commas)
+      return! ResultOrString.Error "Could not find parameter locations"
+    | Some paramLocations ->
+
+      let names = paramLocations.LongId
+      let lidEnd = paramLocations.LongIdEndLocation
+      let! methodGroup = checkResults.GetMethods(lidEnd.Line, lidEnd.Column, "", Some names)
+      let methods = methodGroup.Methods
+      do! Result.guard (methods.Length > 0 && not (methodGroup.MethodName.EndsWith "> )")) "no matching methods in method group"
+
+      let! isStaticArgTip = Helpers.isStaticArgTip paramLocations.OpenParenLocation lines
+
+      let filteredMethods =
+        [|
+            for m in methods do
+                if (isStaticArgTip && m.StaticParameters.Length > 0) ||
+                    (not isStaticArgTip && m.HasParameters) then   // need to distinguish TP<...>(...)  angle brackets tip from parens tip
+                    m
+        |]
+
+      do! Result.guard (filteredMethods.Length > 0) "no methods found"
+
+      let startPos = posToLinePosition paramLocations.LongIdStartLocation
+      let endPos =
+        let lastPos = Array.last paramLocations.TupleEndLocations |> posToLinePosition
+        if paramLocations.IsThereACloseParen then Helpers.oneColBefore lastPos else lastPos
+
+      let startOfArgs = paramLocations.OpenParenLocation |> posToLinePosition |> Helpers.oneColAfter
+      let tupleEnds =
+        [|
+          startOfArgs
+          for i in 0..paramLocations.TupleEndLocations.Length-2 do
+            posToLinePosition paramLocations.TupleEndLocations.[i]
+          endPos
+        |]
+
+      match triggeringChar with
+      | Some ('<' | '(' | ',') when not (tupleEnds |> Array.exists (fun pos -> pos.Column = caretLineColumn)) ->
+        return None
+      | _ ->
+        // Compute the argument index by working out where the caret is between the various commas.
+        let argumentIndex =
+          let computedTextSpans =
+              tupleEnds
+              |> Array.pairwise
+              |> Array.map (fun (startPos, endPos) -> mkRange "foo" startPos endPos )
+
+          match (computedTextSpans |> Array.tryFindIndex (fun t -> rangeContainsPos t caretPosition)) with
+          | None ->
+              // Because 'TextSpan.Contains' only succeeds if 'TextSpan.Start <= caretPosition < TextSpan.End' is true,
+              // we need to check if the caret is at the very last position in the TextSpan.
+              //
+              // We default to 0, which is the first argument, if the caret position was nowhere to be found.
+              if computedTextSpans.[computedTextSpans.Length-1].End = caretPosition then
+                  computedTextSpans.Length-1
+              else 0
+          | Some n -> n
+
+        let argumentCount =
+          match paramLocations.TupleEndLocations.Length with
+          | 1 when caretLinePos.Character = startOfArgs.Character -> 0  // count "WriteLine(" as zero arguments
+          | n -> n
+
+        // Compute the current argument name if it is named.
+        let argumentName =
+          if argumentIndex < paramLocations.NamedParamNames.Length then
+            paramLocations.NamedParamNames.[argumentIndex]
+          else
+            None
+
+        let results = ()
+        return Some results
   }
 
   member __.TryFindDeclaration (pos: pos) (lineStr: LineStr) = async {

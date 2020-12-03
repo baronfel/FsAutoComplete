@@ -16,6 +16,7 @@ open FsToolkit.ErrorHandling
 module Result =
   let bimap okF errF r = match r with | Ok x -> okF x | Error y -> errF y
   let ofOption recover o = match o with | Some x -> Ok x | None -> Error (recover ())
+  let guard condition errVal = if condition then Ok () else Error errVal
 
 [<RequireQualifiedAccess>]
 type LocationResponse<'a,'b> =
