@@ -912,10 +912,10 @@ let findGreaterMultiple (value : int) (powerNumber : int) =
     res
 
 /// Try to find the start column, so we know what the base indentation should be
-let inferStartColumn  (codeGenServer : CodeGenerationService) (pos : pos) (doc : Document) (lines: LineStr[]) (lineStr : string) (interfaceData : InterfaceData) (indentSize : int) =
+let inferStartColumn  (codeGenServer : CodeGenerationService) (pos : pos) (doc : Document) (text: FileText) (lineStr : string) (interfaceData : InterfaceData) (indentSize : int) =
     match getMemberNameAndRanges interfaceData with
     | (_, range) :: _ ->
-        getLineIdent lines.[range.StartLine-1]
+        getLineIdent text.[range.StartLine-1]
     | [] ->
         match interfaceData with
         | InterfaceData.Interface _ as iface ->
@@ -938,7 +938,7 @@ let inferStartColumn  (codeGenServer : CodeGenerationService) (pos : pos) (doc :
 /// Return None, if we failed to handle the interface implementation
 /// Return Some (insertPosition, generatedString):
 /// `insertPosition`: representation the position where the editor should insert the `generatedString`
-let handleImplementInterface (codeGenServer : CodeGenerationService) (checkResultForFile: ParseAndCheckResults) (pos : pos) (doc : Document) (lines: LineStr[]) (lineStr : string) (interfaceData : InterfaceData) =
+let handleImplementInterface (codeGenServer : CodeGenerationService) (checkResultForFile: ParseAndCheckResults) (pos : pos) (doc : Document) (text: FileText) (lineStr : string) (interfaceData : InterfaceData) =
     async {
         let! result = asyncMaybe {
             let! _symbol, symbolUse = codeGenServer.GetSymbolAndUseAtPositionOfKind(doc.FullName, pos, SymbolKind.Ident)
@@ -1002,7 +1002,7 @@ let handleImplementInterface (codeGenServer : CodeGenerationService) (checkResul
             let generatedString =
                 let formattedString =
                     formatInterface
-                        (inferStartColumn codeGenServer pos doc lines lineStr interfaceData 4) // 4 here correspond to the indent size
+                        (inferStartColumn codeGenServer pos doc text lineStr interfaceData 4) // 4 here correspond to the indent size
                         4 // Should we make it a setting from the IDE ?
                         interfaceData.TypeParameters
                         "$objectIdent"

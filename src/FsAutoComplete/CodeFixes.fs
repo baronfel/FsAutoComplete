@@ -85,14 +85,14 @@ module Util =
   /// advance along positions from a starting location, incrementing in a known way until a condition is met.
   /// when the condition is met, return that position.
   /// if the condition is never met, return None
-  let walkPos (lines: string []) (pos: LspTypes.Position) posChange condition: LspTypes.Position option =
+  let walkPos (lines: FileText) (pos: LspTypes.Position) posChange condition: LspTypes.Position option =
     let charAt (pos: LspTypes.Position) = lines.[pos.Line].[pos.Character]
 
     let firstPos = { Line = 0; Character = 0 }
 
     let finalPos =
-      { Line = lines.Length - 1
-        Character = lines.[lines.Length - 1].Length - 1 }
+      { Line = lines.Count - 1
+        Character = lines.[lines.Count - 1].Length - 1 }
 
     let rec loop pos =
       if firstPos = pos || finalPos = pos then None
@@ -101,7 +101,7 @@ module Util =
 
     loop pos
 
-  let inc (lines: string []) (pos: LspTypes.Position): LspTypes.Position =
+  let inc (lines: FileText) (pos: LspTypes.Position): LspTypes.Position =
     let lineLength = lines.[pos.Line].Length
 
     if pos.Character = lineLength - 1 then
@@ -110,7 +110,7 @@ module Util =
       { pos with
           Character = pos.Character + 1 }
 
-  let dec (lines: string []) (pos: LspTypes.Position): LspTypes.Position =
+  let dec (lines: FileText) (pos: LspTypes.Position): LspTypes.Position =
     if pos.Character = 0 then
       let newLine = pos.Line - 1
       // decrement to end of previous line
@@ -121,10 +121,10 @@ module Util =
       { pos with
           Character = pos.Character - 1 }
 
-  let walkBackUntilCondition (lines: string []) (pos: LspTypes.Position) condition =
+  let walkBackUntilCondition (lines: FileText) (pos: LspTypes.Position) condition =
     walkPos lines pos (dec lines) condition
 
-  let walkForwardUntilCondition (lines: string []) (pos: LspTypes.Position) condition =
+  let walkForwardUntilCondition (lines: FileText) (pos: LspTypes.Position) condition =
     walkPos lines pos (inc lines) condition
 
 open Types
@@ -163,6 +163,9 @@ module Fixes =
   open Util
   open FsAutoComplete.FCSPatches
 
+  type GetParseResultsForFile = string -> FSharp.Compiler.Range.pos -> Async<Result<ParseAndCheckResults * string * FileText, string>>
+  type GetFileLines = string -> Result<FileText, string>
+
   /// insert a line of text at a given line
   let private insertLine line lineStr =
     { Range =
@@ -170,7 +173,7 @@ module Fixes =
           End = { Line = line; Character = 0 } }
       NewText = lineStr }
 
-  let private adjustInsertionPoint (lines: string []) (ctx: InsertContext) =
+  let private adjustInsertionPoint (lines: FileText) (ctx: InsertContext) =
     let l = ctx.Pos.Line
 
     match ctx.ScopeKind with
@@ -218,7 +221,7 @@ module Fixes =
       "Unused open statement"
 
   /// a codefix the provides suggestions for opening modules or using qualified names when an identifier is found that needs qualification
-  let resolveNamespace getParseResultsForFile getNamespaceSuggestions =
+  let resolveNamespace (getParseResultsForFile: GetParseResultsForFile) getNamespaceSuggestions =
     let qualifierFix file diagnostic qual =
       { SourceDiagnostic = Some diagnostic
         Edits =
@@ -228,7 +231,7 @@ module Fixes =
         Title = $"Use %s{qual}"
         Kind = Fix }
 
-    let openFix fileLines file diagnostic (word: string) (ns, name: string, ctx, multiple): Fix =
+    let openFix (fileLines: FileText) file diagnostic (word: string) (ns, name: string, ctx, multiple): Fix =
       let insertPoint = adjustInsertionPoint fileLines ctx
       let docLine = insertPoint - 1
 
@@ -329,11 +332,12 @@ module Fixes =
       "This qualifier is redundant"
 
   /// a codefix that suggests prepending a _ to unused values
-  let unusedValue getFileLines =
+  let unusedValue (getFileLines: GetFileLines) =
     ifDiagnosticByMessage
       (fun diagnostic codeActionParams ->
         async {
-          match getFileLines (codeActionParams.TextDocument.GetFilePath()) with
+          let filePath = codeActionParams.TextDocument.GetFilePath()
+          match getFileLines filePath with
           | Ok lines ->
               match diagnostic.Code with
               | Some _ ->
@@ -347,7 +351,7 @@ module Fixes =
                         Kind = Refactor } ]
               | None ->
                   let replaceSuggestion = "_"
-                  let prefixSuggestion = $"_{getText lines diagnostic.Range}"
+                  let prefixSuggestion = $"_{lines.GetText (protocolRangeToRange filePath diagnostic.Range)}"
 
                   return
                     [ { SourceDiagnostic = Some diagnostic
@@ -369,24 +373,25 @@ module Fixes =
       "is unused"
 
   /// a codefix that suggestes using the 'new' keyword on IDisposables
-  let newWithDisposables getFileLines =
+  let newWithDisposables (getFileLines: GetFileLines) =
     ifDiagnosticByMessage
       (fun diagnostic codeActionParams ->
-        match getFileLines (codeActionParams.TextDocument.GetFilePath()) with
+        let filePath = codeActionParams.TextDocument.GetFilePath()
+        match getFileLines filePath with
         | Ok lines ->
             async.Return [ { SourceDiagnostic = Some diagnostic
                              File = codeActionParams.TextDocument
                              Title = "Add new"
                              Edits =
                                [| { Range = diagnostic.Range
-                                    NewText = $"new {getText lines diagnostic.Range}" } |]
+                                    NewText = $"new {lines.GetText (protocolRangeToRange filePath diagnostic.Range)}" } |]
                              Kind = Refactor } ]
         | Error _ -> async.Return [])
       "It is recommended that objects supporting the IDisposable interface are created using the syntax"
 
   /// a codefix that generates union cases for an incomplete match expression
-  let generateUnionCases (getFileLines: string -> Result<string [], _>)
-                         (getParseResultsForFile: string -> FSharp.Compiler.Range.pos -> Async<Result<ParseAndCheckResults * string * string array, 'e>>)
+  let generateUnionCases (getFileLines: GetFileLines)
+                         (getParseResultsForFile: GetParseResultsForFile)
                          (generateCases: _ -> _ -> _ -> _ -> Async<CoreResponse<_>>)
                          (getTextReplacements: unit -> Map<string, string>)
                          =
@@ -396,7 +401,7 @@ module Fixes =
           let fileName =
             codeActionParams.TextDocument.GetFilePath()
 
-          let! (lines: string []) = getFileLines fileName
+          let! lines = getFileLines fileName
           let caseLine = diagnostic.Range.Start.Line + 1
           let col = lines.[caseLine].IndexOf('|') + 3 // Find column of first case in patern matching
 
@@ -458,8 +463,8 @@ module Fixes =
   let mapAnalyzerDiagnostics = mapExternalDiagnostic "F# Analyzers"
 
   /// a codefix that generates member stubs for an interface declaration
-  let generateInterfaceStub (getFileLines: string -> Result<string [], _>)
-                            (getParseResultsForFile: string -> FSharp.Compiler.Range.pos -> Async<Result<ParseAndCheckResults * string * string array, 'e>>)
+  let generateInterfaceStub (getFileLines: GetFileLines)
+                            (getParseResultsForFile: GetParseResultsForFile)
                             (genInterfaceStub: _ -> _ -> _ -> _ -> Async<CoreResponse<string * FSharp.Compiler.Range.pos>>)
                             (getTextReplacements: unit -> Map<string, string>)
                             : CodeFix =
@@ -468,7 +473,7 @@ module Fixes =
         let fileName =
           codeActionParams.TextDocument.GetFilePath()
 
-        let! (lines: string []) = getFileLines fileName
+        let! lines = getFileLines fileName
 
         let pos =
           protocolPosToPos codeActionParams.Range.Start
@@ -497,8 +502,8 @@ module Fixes =
       |> AsyncResult.foldResult id (fun _ -> [])
 
   /// a codefix that generates member stubs for a record declaration
-  let generateRecordStub (getFileLines: string -> Result<string [], _>)
-                         (getParseResultsForFile: string -> FSharp.Compiler.Range.pos -> Async<Result<ParseAndCheckResults * string * string array, 'e>>)
+  let generateRecordStub (getFileLines: GetFileLines)
+                         (getParseResultsForFile: GetParseResultsForFile)
                          (genRecordStub: _ -> _ -> _ -> _ -> Async<CoreResponse<string * FSharp.Compiler.Range.pos>>)
                          (getTextReplacements: unit -> Map<string, string>)
                          : CodeFix =
@@ -507,7 +512,7 @@ module Fixes =
         let fileName =
           codeActionParams.TextDocument.GetFilePath()
 
-        let! (lines: string []) = getFileLines fileName
+        let! lines = getFileLines fileName
 
         let pos =
           protocolPosToPos codeActionParams.Range.Start
@@ -535,7 +540,7 @@ module Fixes =
       |> AsyncResult.foldResult id (fun _ -> [])
 
   /// a codefix that adds in missing '=' characters in type declarations
-  let addMissingEqualsToTypeDefinition (getFileLines: string -> Result<string [], _>) =
+  let addMissingEqualsToTypeDefinition (getFileLines: GetFileLines) =
     ifDiagnosticByCode
       (fun diagnostic codeActionParams ->
         asyncResult {
@@ -566,7 +571,7 @@ module Fixes =
       (Set.ofList [ "10"; "3360" ])
 
   /// a codefix that corrects -<something> to - <something> when negation is not intended
-  let changeNegationToSubtraction (getFileLines: string -> Result<string [], _>): CodeFix =
+  let changeNegationToSubtraction (getFileLines: GetFileLines): CodeFix =
     ifDiagnosticByCode
       (fun diagnostic codeActionParams ->
         asyncResult {
@@ -591,7 +596,7 @@ module Fixes =
       (Set.ofList [ "3" ])
 
   /// a codefix that corrects == equality to = equality
-  let doubleEqualsToSingleEquality (getFileLines: string -> Result<string [], _>): CodeFix =
+  let doubleEqualsToSingleEquality (getFileLines: GetFileLines): CodeFix =
     ifDiagnosticByCode
       (fun diagnostic codeActionParams ->
         asyncResult {
@@ -599,7 +604,7 @@ module Fixes =
             codeActionParams.TextDocument.GetFilePath()
 
           let! lines = getFileLines fileName
-          let errorText = getText lines diagnostic.Range
+          let errorText = lines.GetText (protocolRangeToRange fileName diagnostic.Range)
 
           match errorText with
           | "==" ->
@@ -633,12 +638,13 @@ module Fixes =
       (Set.ofList [ "10" ])
 
   /// a codefix that parenthesizes a member expression that needs it
-  let parenthesizeExpression (getFileLines: string -> Result<string [], _>): CodeFix =
+  let parenthesizeExpression (getFileLines: GetFileLines): CodeFix =
     ifDiagnosticByCode
       (fun diagnostic codeActionParams ->
-        match getFileLines (codeActionParams.TextDocument.GetFilePath()) with
+        let fileName = codeActionParams.TextDocument.GetFilePath()
+        match getFileLines fileName with
         | Ok lines ->
-            let erroringExpression = getText lines diagnostic.Range
+            let erroringExpression = lines.GetText (protocolRangeToRange fileName diagnostic.Range)
 
             async.Return [ { Title = "Wrap expression in parentheses"
                              File = codeActionParams.TextDocument
@@ -651,7 +657,7 @@ module Fixes =
       (Set.ofList [ "597" ])
 
   /// a codefix that changes a ref cell deref (!) to a call to 'not'
-  let refCellDerefToNot (getParseResultsForFile: string -> FSharp.Compiler.Range.pos -> Async<Result<ParseAndCheckResults * string * string array, string>>)
+  let refCellDerefToNot (getParseResultsForFile: GetParseResultsForFile)
                         : CodeFix =
     ifDiagnosticByCode
       (fun diagnostic codeActionParams ->
@@ -678,12 +684,13 @@ module Fixes =
       (Set.ofList [ "1" ])
 
   /// a codefix that replaces unsafe casts with safe casts
-  let upcastUsage (getFileLines: string -> Result<string [], _>): CodeFix =
+  let upcastUsage (getFileLines: GetFileLines): CodeFix =
     ifDiagnosticByCode
       (fun diagnostic codeActionParams ->
-        match getFileLines (codeActionParams.TextDocument.GetFilePath()) with
+        let fileName = codeActionParams.TextDocument.GetFilePath()
+        match getFileLines fileName with
         | Ok lines ->
-            let expressionText = getText lines diagnostic.Range
+            let expressionText = lines.GetText (protocolRangeToRange fileName diagnostic.Range)
             let isDowncastOperator = expressionText.Contains(":?>")
             let isDowncastKeyword = expressionText.Contains("downcast")
 
@@ -711,7 +718,7 @@ module Fixes =
       (Set.ofList [ "3198" ])
 
   /// a codefix that makes a binding mutable when a user attempts to mutably set it
-  let makeDeclarationMutable (getParseResultsForFile: string -> FSharp.Compiler.Range.pos -> Async<Result<ParseAndCheckResults * string * string array, string>>)
+  let makeDeclarationMutable (getParseResultsForFile: GetParseResultsForFile)
                              (getProjectOptionsForFile: string -> Result<FSharpProjectOptions, string>)
                              : CodeFix =
     ifDiagnosticByCode
@@ -750,7 +757,7 @@ module Fixes =
       (Set.ofList [ "27" ])
 
   /// a codefix that changes equality checking to mutable assignment when the compiler thinks it's relevant
-  let comparisonToMutableAssignment (getParseResultsForFile: string -> FSharp.Compiler.Range.pos -> Async<Result<ParseAndCheckResults * string * string array, string>>)
+  let comparisonToMutableAssignment (getParseResultsForFile: GetParseResultsForFile)
                                     : CodeFix =
     ifDiagnosticByCode
       (fun diagnostic codeActionParams ->
@@ -787,7 +794,7 @@ module Fixes =
       (Set.ofList [ "20" ])
 
   /// a codefix that converts unknown/partial record expressions to anonymous records
-  let partialOrInvalidRecordExpressionToAnonymousRecord (getParseResultsForFile: string -> FSharp.Compiler.Range.pos -> Async<Result<ParseAndCheckResults * string * string array, string>>)
+  let partialOrInvalidRecordExpressionToAnonymousRecord (getParseResultsForFile: GetParseResultsForFile)
                                                         : CodeFix =
     ifDiagnosticByCode
       (fun diagnostic codeActionParams ->
@@ -800,17 +807,17 @@ module Fixes =
 
           match tyRes.GetParseResults.TryRangeOfRecordExpressionContainingPos fcsPos with
           | Some recordExpressionRange ->
-              let recordExpressionRange = fcsRangeToLsp recordExpressionRange
+              let protocolRecordExpressionRange = fcsRangeToLsp recordExpressionRange
 
               let startInsertRange =
-                let next = inc lines recordExpressionRange.Start
+                let next = inc lines protocolRecordExpressionRange.Start
                 { Start = next; End = next }
 
               let endInsertRange =
-                let prev = dec lines recordExpressionRange.End
+                let prev = dec lines protocolRecordExpressionRange.End
                 { Start = prev; End = prev }
 
-              let recordExpressionText = getText lines recordExpressionRange
+              let recordExpressionText = lines.GetText recordExpressionRange
 
               return
                 [ { Title = "Convert to anonymous record"
@@ -828,7 +835,7 @@ module Fixes =
       (Set.ofList [ "39" ])
 
   /// a codefix that removes 'return' or 'yield' (or bang-variants) when the compiler says they're not necessary
-  let removeUnnecessaryReturnOrYield (getParseResultsForFile: string -> FSharp.Compiler.Range.pos -> Async<Result<ParseAndCheckResults * string * string array, string>>)
+  let removeUnnecessaryReturnOrYield (getParseResultsForFile: GetParseResultsForFile)
                                      : CodeFix =
     ifDiagnosticByCode
       (fun diagnostic codeActionParams ->
@@ -844,8 +851,8 @@ module Fixes =
           | None -> return []
           | Some exprRange ->
               let protocolExprRange = fcsRangeToLsp exprRange
-              let exprText = getText lines protocolExprRange
-              let errorText = getText lines diagnostic.Range
+              let exprText = lines.GetText exprRange
+              let errorText = lines.GetText (protocolRangeToRange fileName diagnostic.Range)
 
               let! title =
                 if errorText.StartsWith "return!"
@@ -872,7 +879,7 @@ module Fixes =
       (Set.ofList [ "748"; "747" ])
 
   /// a codefix that rewrites C#-style '=>' lambdas to F#-style 'fun _ -> _' lambdas
-  let rewriteCSharpLambdaToFSharpLambda (getParseResultsForFile: string -> FSharp.Compiler.Range.pos -> Async<Result<ParseAndCheckResults * string * string array, string>>)
+  let rewriteCSharpLambdaToFSharpLambda (getParseResultsForFile: GetParseResultsForFile)
                                         : CodeFix =
     ifDiagnosticByCode
       (fun diagnostic codeActionParams ->
@@ -885,11 +892,8 @@ module Fixes =
 
           match tyRes.GetParseResults.TryRangeOfParenEnclosingOpEqualsGreaterUsage fcsPos with
           | Some (fullParenRange, lambdaArgRange, lambdaBodyRange) ->
-              let argExprText =
-                getText lines (fcsRangeToLsp lambdaArgRange)
-
-              let bodyExprText =
-                getText lines (fcsRangeToLsp lambdaBodyRange)
+              let argExprText = lines.GetText lambdaArgRange
+              let bodyExprText = lines.GetText lambdaBodyRange
 
               let replacementText = $"fun {argExprText} -> {bodyExprText}"
               let replacementRange = fcsRangeToLsp fullParenRange

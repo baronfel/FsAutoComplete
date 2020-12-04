@@ -148,7 +148,7 @@ type Commands<'analyzer> (serialize : Serializer, backgroundServiceEnabled) =
                   match state.Files.TryGetValue file with
                   | true, fileData ->
 
-                    let res = handler (file, fileData.Lines, pt, tast, parseAndCheck.GetCheckResults.PartialAssemblySignature.Entities |> Seq.toList, parseAndCheck.GetAllEntities)
+                    let res = handler (file, fileData.Text.Lines.AllLines, pt, tast, parseAndCheck.GetCheckResults.PartialAssemblySignature.Entities |> Seq.toList, parseAndCheck.GetAllEntities)
 
                     (res, file)
                     |> NotificationEvent.AnalyzerMessage
@@ -172,25 +172,26 @@ type Commands<'analyzer> (serialize : Serializer, backgroundServiceEnabled) =
         async {
           for file in files do
             try
-                let sourceOpt =
+                let text =
                     match state.Files.TryFind file with
-                    | Some f -> Some (f.Lines)
+                    | Some f -> Some f.Text
                     | None when File.Exists(file) ->
                         let ctn = File.ReadAllLines file
-                        state.Files.[file] <- { Touched = DateTime.Now; Lines = ctn; Version = None }
+                        let text = FileText(file, ctn)
+                        state.Files.[file] <- { Touched = DateTime.Now; Text = text; Version = None }
                         let payload =
                             if Utils.isAScript file
                             then BackgroundServices.ScriptFile(file, fsiScriptTFM)
                             else BackgroundServices.SourceFile file
                         if backgroundServiceEnabled then BackgroundServices.updateFile(payload, ctn |> String.concat "\n", 0)
-                        Some (ctn)
+                        Some text
                     | None -> None
-                match sourceOpt with
+                match text with
                 | None -> ()
-                | Some source ->
+                | Some text ->
                     let opts = state.GetProjectOptions' file |> Utils.projectOptionsToParseOptions
                     async {
-                      let! parseRes = checker.ParseFile(file, source |> String.concat "\n", opts)
+                      let! parseRes = checker.ParseFile(file, text, opts)
                       fileParsed.Trigger parseRes
                     }
                     |> Async.Start
@@ -245,6 +246,13 @@ type Commands<'analyzer> (serialize : Serializer, backgroundServiceEnabled) =
         else
           commandsLogger.info (Log.setMessage "Project from cache '{file}'" >> Log.addContextDestructured "file" projectFileName)
 
+    let documentForFileText (text: FileText): Document =
+      { LineCount = text.Count
+        FullName = text.FileName
+        GetText = fun _ -> text.Lines.BackingString
+        GetLineText0 = fun i -> text.[i]
+        GetLineText1 = fun i -> text.[i - 1] }
+
     member __.Notify = notify.Publish
 
     member __.WorkspaceReady = state.ProjectController.WorkspaceReady
@@ -268,15 +276,16 @@ type Commands<'analyzer> (serialize : Serializer, backgroundServiceEnabled) =
     member __.LastCheckResult
         with get() = lastCheckResult
 
-    member __.SetFileContent(file: SourceFilePath, lines: LineStr[], version, tfmIfScript) =
+    member __.SetFileContent(file: SourceFilePath, text, version, tfmIfScript) =
         let file = Path.GetFullPath file
-        state.AddFileText(file, lines, version)
+        let fileText = FileText(file, text)
+        state.AddFileText(file, fileText, version)
         let payload =
             if Utils.isAScript file
             then BackgroundServices.ScriptFile(file, tfmIfScript)
             else BackgroundServices.SourceFile file
 
-        if backgroundServiceEnabled then BackgroundServices.updateFile(payload, lines |> String.concat "\n", defaultArg version 0)
+        if backgroundServiceEnabled then BackgroundServices.updateFile(payload, text |> String.concat "\n", defaultArg version 0)
 
     member private x.MapResultAsync (successToString: 'a -> Async<CoreResponse<'b>>, ?failureToString: string -> CoreResponse<'b>) =
         Async.bind <| function
@@ -442,10 +451,10 @@ type Commands<'analyzer> (serialize : Serializer, backgroundServiceEnabled) =
 
     member x.TryGetFileVersion = state.TryGetFileVersion
 
-    member x.Parse file lines version (isSdkScript: bool option) =
+    member x.Parse file (text: string []) version (isSdkScript: bool option) =
         let file = Path.GetFullPath file
         let tmf = isSdkScript |> Option.map (fun n -> if n then FSIRefs.NetCore else FSIRefs.NetFx) |> Option.defaultValue FSIRefs.NetFx
-
+        let sourceText = FileText(file, text)
         do x.CancelQueue file
         async {
             let colorizations = state.ColorizationOutput
@@ -472,15 +481,14 @@ type Commands<'analyzer> (serialize : Serializer, backgroundServiceEnabled) =
                     SourceFiles = opts.SourceFiles |> Array.map (Path.GetFullPath)
                     OtherOptions = opts.OtherOptions |> Array.map (fun n -> if FscArguments.isCompileFile(n) then Path.GetFullPath n else n)
                 }
-            let text = String.concat "\n" lines
 
             if Utils.isAScript file
             then
                 commandsLogger.info (Log.setMessage "Checking script file '{file}'" >> Log.addContextDestructured "file" file)
                 let hash  =
-                  lines
-                  |> Array.filter (fun n -> n.StartsWith "#r" || n.StartsWith "#load" || n.StartsWith "#I")
-                  |> Array.toList
+                  text
+                  |> Seq.filter (fun n -> n.StartsWith "#r" || n.StartsWith "#load" || n.StartsWith "#I")
+                  |> Seq.toList
                   |> fun n -> n.GetHashCode ()
 
                 let! checkOptions =
@@ -489,57 +497,50 @@ type Commands<'analyzer> (serialize : Serializer, backgroundServiceEnabled) =
                     async.Return opts
                   | _ ->
                     async {
-                      let! checkOptions = checker.GetProjectOptionsFromScript(file, text, tmf)
+                      let! checkOptions = checker.GetProjectOptionsFromScript(file, sourceText, tmf)
                       state.ScriptProjectOptions.AddOrUpdate(file, (hash, checkOptions), (fun _ _ -> (hash, checkOptions))) |> ignore
                       return checkOptions
                     }
 
                 scriptFileProjectOptions.Trigger checkOptions
-                state.AddFileTextAndCheckerOptions(file, lines, normalizeOptions checkOptions, Some version)
+                state.AddFileTextAndCheckerOptions(file, sourceText, normalizeOptions checkOptions, Some version)
                 fileStateSet.Trigger ()
-                return! parse' file text checkOptions
+                return! parse' file sourceText checkOptions
             else
                 let! checkOptions =
-                    match state.GetCheckerOptions(file, lines) with
+                    match state.GetCheckerOptions(file, sourceText) with
                     | Some c ->
                         state.SetFileVersion file version
                         async.Return c
                     | None -> async {
-                        let! checkOptions = checker.GetProjectOptionsFromScript(file, text, tmf)
-                        state.AddFileTextAndCheckerOptions(file, lines, normalizeOptions checkOptions, Some version)
+                        let! checkOptions = checker.GetProjectOptionsFromScript(file, sourceText, tmf)
+                        state.AddFileTextAndCheckerOptions(file, sourceText, normalizeOptions checkOptions, Some version)
                         return checkOptions
                     }
                 fileStateSet.Trigger ()
-                return! parse' file text checkOptions
+                return! parse' file sourceText checkOptions
         } |> x.AsCancellable file |> AsyncResult.recoverCancellation
 
 
     member x.Declarations file lines version = async {
         let file = Path.GetFullPath file
-        match state.TryGetFileCheckerOptionsWithSource file, lines with
+        match state.TryGetFileCheckerOptionsWithLines file, lines with
         | ResultOrString.Error s, None ->
             match state.TryGetFileSource file with
             | ResultOrString.Error s -> return CoreResponse.ErrorRes s
-            | ResultOrString.Ok l ->
-                let text = String.concat "\n" l
+            | ResultOrString.Ok fileText ->
                 let files = Array.singleton file
                 let parseOptions = { FSharpParsingOptions.Default with SourceFiles = files}
-                let! decls = checker.GetDeclarations(file, text, parseOptions, version)
+                let! decls = checker.GetDeclarations(file, fileText, parseOptions, version)
                 let decls = decls |> Array.map (fun a -> a,file)
                 return CoreResponse.Res decls
-        | ResultOrString.Error _, Some l ->
-            let text = String.concat "\n" l
+        | ResultOrString.Error _, Some fileText ->
             let files = Array.singleton file
             let parseOptions = { FSharpParsingOptions.Default with SourceFiles = files}
-            let! decls = checker.GetDeclarations(file, text, parseOptions, version)
+            let! decls = checker.GetDeclarations(file, fileText, parseOptions, version)
             let decls = decls |> Array.map (fun a -> a,file)
             return CoreResponse.Res decls
-        | ResultOrString.Ok (checkOptions, source), _ ->
-            let text =
-                match lines with
-                | Some l -> String.concat "\n" l
-                | None -> source
-
+        | ResultOrString.Ok (checkOptions, text), _ ->
             let parseOptions = Utils.projectOptionsToParseOptions checkOptions
             let! decls = checker.GetDeclarations(file, text, parseOptions, version)
 
@@ -572,7 +573,7 @@ type Commands<'analyzer> (serialize : Serializer, backgroundServiceEnabled) =
         | Some (decl, pos, fn) -> //Is in sync filled cache, try to get results from async filled cahces or calculate if it's not there
             let source =
                 state.Files.TryFind fn
-                |> Option.map (fun n -> n.Lines)
+                |> Option.map (fun n -> n.Text)
             match source with
             | None -> return CoreResponse.ErrorRes (sprintf "No help text available for symbol '%s'" sym)
             | Some source ->
@@ -598,7 +599,7 @@ type Commands<'analyzer> (serialize : Serializer, backgroundServiceEnabled) =
     member x.Colorization enabled = state.ColorizationOutput <- enabled
     member x.Error msg = [CoreResponse.ErrorRes msg]
 
-    member x.Completion (tyRes : ParseAndCheckResults) (pos: pos) lineStr (lines : string[]) (fileName : SourceFilePath) filter includeKeywords includeExternal = async {
+    member x.Completion (tyRes : ParseAndCheckResults) (pos: pos) lineStr (text : FileText) (fileName : SourceFilePath) filter includeKeywords includeExternal = async {
         let fileName = Path.GetFullPath fileName
         let getAllSymbols () =
             if includeExternal then tyRes.GetAllEntities true else []
@@ -606,7 +607,7 @@ type Commands<'analyzer> (serialize : Serializer, backgroundServiceEnabled) =
         match res with
         | Some (decls, residue, shouldKeywords) ->
             let declName (d: FSharpDeclarationListItem) = d.Name
-            let getLine = fun i -> lines.[i - 1]
+            let getLine = fun i -> text.[i - 1]
 
             //Init cache for current list
             state.Declarations.Clear()
@@ -735,8 +736,8 @@ type Commands<'analyzer> (serialize : Serializer, backgroundServiceEnabled) =
         |> x.MapResult (CoreResponse.Res, CoreResponse.ErrorRes)
         |> x.AsCancellable (Path.GetFullPath tyRes.FileName) |> AsyncResult.recoverCancellation
 
-    member x.Methods (tyRes : ParseAndCheckResults) (pos: pos) (lines: LineStr[]) =
-        tyRes.TryGetMethodOverrides lines pos
+    member x.Methods (tyRes : ParseAndCheckResults) (pos: pos) (text: FileText) =
+        tyRes.TryGetMethodOverrides text pos
         |> AsyncResult.bimap CoreResponse.Res CoreResponse.ErrorRes
 
     member x.Lint (file: SourceFilePath): Async<unit> =
@@ -846,17 +847,10 @@ type Commands<'analyzer> (serialize : Serializer, backgroundServiceEnabled) =
         |> x.AsCancellable (Path.GetFullPath tyRes.FileName)
         |> AsyncResult.recoverCancellation
 
-    member x.GetUnionPatternMatchCases (tyRes : ParseAndCheckResults) (pos: pos) (lines: LineStr[]) (line: LineStr) =
+    member x.GetUnionPatternMatchCases (tyRes : ParseAndCheckResults) (pos: pos) (text: FileText) (line: LineStr) =
         async {
             let codeGenService = CodeGenerationService(checker, state)
-            let doc = {
-                Document.LineCount = lines.Length
-                FullName = tyRes.FileName
-                GetText = fun _ -> lines |> String.concat "\n"
-                GetLineText0 = fun i -> lines.[i]
-                GetLineText1 = fun i -> lines.[i - 1]
-            }
-
+            let doc = documentForFileText text
             let! res = tryFindUnionDefinitionFromPos codeGenService pos doc
             match res with
             | None -> return CoreResponse.InfoRes "Union at position not found"
@@ -873,17 +867,10 @@ type Commands<'analyzer> (serialize : Serializer, backgroundServiceEnabled) =
         |> x.AsCancellable (Path.GetFullPath tyRes.FileName)
         |> AsyncResult.recoverCancellation
 
-    member x.GetRecordStub (tyRes : ParseAndCheckResults) (pos: pos) (lines: LineStr[]) (line: LineStr) =
+    member x.GetRecordStub (tyRes : ParseAndCheckResults) (pos: pos) (text: FileText) (line: LineStr) =
         async {
             let codeGenServer = CodeGenerationService(checker, state)
-            let doc = {
-                Document.LineCount = lines.Length
-                FullName = tyRes.FileName
-                GetText = fun _ -> lines |> String.concat "\n"
-                GetLineText0 = fun i -> lines.[i]
-                GetLineText1 = fun i -> lines.[i - 1]
-            }
-
+            let doc = documentForFileText text
             let! res = tryFindRecordDefinitionFromPos codeGenServer pos doc
             match res with
             | None -> return CoreResponse.InfoRes "Record at position not found"
@@ -899,22 +886,15 @@ type Commands<'analyzer> (serialize : Serializer, backgroundServiceEnabled) =
         |> x.AsCancellable (Path.GetFullPath tyRes.FileName)
         |> AsyncResult.recoverCancellation
 
-    member x.GetInterfaceStub (tyRes : ParseAndCheckResults) (pos: pos) (lines: LineStr[]) (lineStr: LineStr) =
+    member x.GetInterfaceStub (tyRes : ParseAndCheckResults) (pos: pos) (text: FileText) (lineStr: LineStr) =
         async {
             let codeGenServer = CodeGenerationService(checker, state)
-            let doc = {
-                Document.LineCount = lines.Length
-                FullName = tyRes.FileName
-                GetText = fun _ -> lines |> String.concat "\n"
-                GetLineText0 = fun i -> lines.[i]
-                GetLineText1 = fun i -> lines.[i - 1]
-            }
-
+            let doc = documentForFileText text
             let! res = tryFindInterfaceExprInBufferAtPos codeGenServer pos doc
             match res with
             | None -> return CoreResponse.InfoRes "Interface at position not found"
             | Some interfaceData ->
-                let! stubInfo = handleImplementInterface codeGenServer tyRes pos doc lines lineStr interfaceData
+                let! stubInfo = handleImplementInterface codeGenServer tyRes pos doc text lineStr interfaceData
 
                 match stubInfo with
                 | Some (insertPosition, generatedCode) ->
@@ -984,7 +964,7 @@ type Commands<'analyzer> (serialize : Serializer, backgroundServiceEnabled) =
             | None ->
               return ()
             | Some tyRes ->
-                let! unused = UnusedOpens.getUnusedOpens(tyRes.GetCheckResults, fun i -> source.[i - 1])
+                let! unused = FsAutoComplete.FCSPatches.UnusedOpens.getUnusedOpens(tyRes.GetCheckResults, fun i -> source.[i - 1])
                 notify.Trigger (NotificationEvent.UnusedOpens (file, (unused |> List.toArray)))
 
         }
@@ -1047,14 +1027,13 @@ type Commands<'analyzer> (serialize : Serializer, backgroundServiceEnabled) =
 
     member x.ScopesForFile (file: string) = asyncResult {
         let file = Path.GetFullPath file
-        let! (opts, sourceLines) = state.TryGetFileCheckerOptionsWithLines file
+        let! (opts, sourceText) = state.TryGetFileCheckerOptionsWithLines file
         let parseOpts = Utils.projectOptionsToParseOptions opts
-        let allSource = sourceLines |> String.concat "\n"
-        let! ast = checker.ParseFile(file, allSource, parseOpts)
+        let! ast = checker.ParseFile(file, sourceText, parseOpts)
         match ast.ParseTree with
         | None -> return! Error (ast.Errors |> Array.map string |> String.concat "\n")
         | Some ast' ->
-            let ranges = Structure.getOutliningRanges sourceLines ast'
+            let ranges = Structure.getOutliningRanges sourceText.Lines.AllLines ast'
             return ranges
     }
 
@@ -1141,7 +1120,7 @@ type Commands<'analyzer> (serialize : Serializer, backgroundServiceEnabled) =
         }
 
         let! hints =
-          contents
+          contents.Lines.AllLines
           |> Array.map (Lexer.tokenizeLine [||])
           |> Array.pairwise
           |> Array.mapi (fun currentIndex (currentTokens, nextTokens) -> currentIndex, currentTokens, nextTokens)

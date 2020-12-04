@@ -29,7 +29,7 @@ type ParseAndCheckResults
 
   let logger = LogProvider.getLoggerByName "ParseAndCheckResults"
 
-  member __.TryGetMethodOverrides (lines: LineStr[]) (pos: pos) = async {
+  member __.TryGetMethodOverrides (text: FileText) (pos: pos) = async {
     // Find the number of `,` in the current signature
     let commas, _, _ =
       let lineCutoff = pos.Line - 6
@@ -38,14 +38,14 @@ type ParseAndCheckResults
         | 1, 1
         | _ when line < lineCutoff -> 1, 1
         | _, 1 ->
-           let prevLine = lines.[line - 2]
+           let prevLine = text.[line - 2]
            if prevLine.Length = 0 then prevPos(line-1, 1)
            else line - 1, prevLine.Length
         | _    -> line, col - 1
 
       let rec loop commas depth (line, col) =
         if (line,col) <= (1,1) then (0, line, col) else
-        let ch = lines.[line - 1].[col - 1]
+        let ch = text.[line - 1].[col - 1]
         let commas = if depth = 0 && ch = ',' then commas + 1 else commas
         if (ch = '(' || ch = '{' || ch = '[') && depth > 0 then loop commas (depth - 1) (prevPos (line,col))
         elif ch = ')' || ch = '}' || ch = ']' then loop commas (depth + 1) (prevPos (line,col))

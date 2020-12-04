@@ -44,12 +44,12 @@ type State =
       ScriptProjectOptions = ConcurrentDictionary()
       ColorizationOutput = false }
 
-  member x.GetCheckerOptions(file: SourceFilePath, lines: LineStr[]) : FSharpProjectOptions option =
+  member x.GetCheckerOptions(file: SourceFilePath, text) : FSharpProjectOptions option =
     let file = Utils.normalizePath file
 
     x.ProjectController.GetProjectOptions file
     |> Option.map (fun opts ->
-        x.Files.[file] <- { Lines = lines; Touched = DateTime.Now; Version = None }
+        x.Files.[file] <- { Text = text; Touched = DateTime.Now; Version = None }
         opts
     )
 
@@ -92,16 +92,16 @@ type State =
   member x.SetLastCheckedVersion (file: SourceFilePath) (version: int) =
     x.LastCheckedVersion.[file] <- version
 
-  member x.AddFileTextAndCheckerOptions(file: SourceFilePath, lines: LineStr[], opts, version) =
+  member x.AddFileTextAndCheckerOptions(file: SourceFilePath, lines, opts, version) =
     let file = Utils.normalizePath file
-    let fileState = { Lines = lines; Touched = DateTime.Now; Version = version }
+    let fileState: VolatileFile = { Text = lines; Touched = DateTime.Now; Version = version }
     x.Files.[file] <- fileState
     x.ProjectController.SetProjectOptions(file, opts)
 
 
-  member x.AddFileText(file: SourceFilePath, lines: LineStr[], version) =
+  member x.AddFileText(file: SourceFilePath, lines, version) =
     let file = Utils.normalizePath file
-    let fileState = { Lines = lines; Touched = DateTime.Now; Version = version }
+    let fileState: VolatileFile = { Text = lines; Touched = DateTime.Now; Version = version }
     x.Files.[file] <- fileState
 
   member x.AddCancellationToken(file : SourceFilePath, token: CancellationTokenSource) =
@@ -129,15 +129,15 @@ type State =
       ExtraProjectInfo = None
       Stamp = None}
 
-  member x.TryGetFileCheckerOptionsWithLines(file: SourceFilePath) : ResultOrString<FSharpProjectOptions * LineStr[]> =
+  member x.TryGetFileCheckerOptionsWithLines(file: SourceFilePath) : ResultOrString<FSharpProjectOptions * FileText> =
     let file = Utils.normalizePath file
     match x.Files.TryFind(file) with
     | None -> ResultOrString.Error (sprintf "File '%s' not parsed" file)
     | Some (volFile) ->
 
       match x.ProjectController.GetProjectOptions(file) with
-      | None -> Ok (State.FileWithoutProjectOptions(file), volFile.Lines)
-      | Some opts -> Ok (opts, volFile.Lines)
+      | None -> Ok (State.FileWithoutProjectOptions(file), volFile.Text)
+      | Some opts -> Ok (opts, volFile.Text)
 
   member x.TryGetFileCheckerOptionsWithSource(file: SourceFilePath) : ResultOrString<FSharpProjectOptions * string> =
     let file = Utils.normalizePath file
@@ -145,18 +145,18 @@ type State =
     | ResultOrString.Error x -> ResultOrString.Error x
     | Ok (opts, lines) -> Ok (opts, String.concat "\n" lines)
 
-  member x.TryGetFileSource(file: SourceFilePath) : ResultOrString<string[]> =
+  member x.TryGetFileSource(file: SourceFilePath) : ResultOrString<FileText> =
     let file = Utils.normalizePath file
     match x.Files.TryFind(file) with
     | None -> ResultOrString.Error (sprintf "File '%s' not parsed" file)
-    | Some f -> Ok (f.Lines)
+    | Some f -> Ok f.Text
 
-  member x.TryGetFileCheckerOptionsWithLinesAndLineStr(file: SourceFilePath, pos : pos) : ResultOrString<FSharpProjectOptions * LineStr[] * LineStr> =
+  member x.TryGetFileCheckerOptionsWithLinesAndLineStr(file: SourceFilePath, pos : pos) : ResultOrString<FSharpProjectOptions * FileText * LineStr> =
     let file = Utils.normalizePath file
     match x.TryGetFileCheckerOptionsWithLines(file) with
     | ResultOrString.Error x -> ResultOrString.Error x
     | Ok (opts, lines) ->
-      let ok = pos.Line <= lines.Length && pos.Line >= 1 &&
+      let ok = pos.Line <= lines.Count && pos.Line >= 1 &&
                pos.Column <= lines.[pos.Line - 1].Length + 1 && pos.Column >= 1
       if not ok then ResultOrString.Error "Position is out of range"
       else Ok (opts, lines, lines.[pos.Line - 1])

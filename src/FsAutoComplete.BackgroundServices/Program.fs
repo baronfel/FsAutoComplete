@@ -153,7 +153,7 @@ type BackgroundServiceServer(state: State, client: FsacClient) =
         | ScriptFile(file, tfm) ->
             state.Files.TryFind (Utils.normalizePath file) |> Option.map (fun st ->
                 async {
-                    let! (opts, _errors) = getScriptOptions file (st.Lines |> String.concat "\n") tfm
+                    let! (opts, _errors) = getScriptOptions file (st.Text |> String.concat "\n") tfm
                     let sf = getFilesFromOpts opts
 
                     return
@@ -184,7 +184,7 @@ type BackgroundServiceServer(state: State, client: FsacClient) =
             do! client.Notify {Value = sprintf "Typechecking %s" file }
             match state.Files.TryFind file, state.FileCheckOptions.TryFind file with
             | Some vf, Some opts ->
-                let txt = vf.Lines |> String.concat "\n"
+                let txt = vf.Text |> String.concat "\n"
                 let! pr, cr = checker.ParseAndCheckFileInProject(file, defaultArg vf.Version 0, SourceText.ofString txt, opts)
                 match cr with
                 | FSharpCheckFileAnswer.Aborted ->
@@ -201,7 +201,7 @@ type BackgroundServiceServer(state: State, client: FsacClient) =
                         do! client.SendDiagnostics msg
                         return ()
             | Some vf, None when file.EndsWith ".fsx" ->
-                let txt = vf.Lines |> String.concat "\n"
+                let txt = vf.Text |> String.concat "\n"
                 let! (opts, _errors) = checker.GetProjectOptionsFromScript(file, SourceText.ofString txt, assumeDotNetFramework = true, useSdkRefs = false)
                 let! pr, cr = checker.ParseAndCheckFileInProject(file, defaultArg vf.Version 0, SourceText.ofString txt, opts)
                 match cr with
@@ -304,7 +304,7 @@ type BackgroundServiceServer(state: State, client: FsacClient) =
             do! client.Notify {Value = sprintf "File update %s" p.File.FilePath }
             let file = Utils.normalizePath p.File.FilePath
 
-            let vf = {Lines = p.Content.Split( [|'\n' |] ); Touched = DateTime.Now; Version = Some p.Version  }
+            let vf = { Text = FileText(file, p.Content.Split( [|'\n' |])) ; Touched = DateTime.Now; Version = Some p.Version  }
             state.Files.AddOrUpdate(file, (fun _ -> vf),( fun _ _ -> vf) ) |> ignore
             let! filesToCheck = defaultArg (getListOfFilesForProjectChecking p.File) (async.Return [])
             do! client.Notify { Value = sprintf "Files to check %A" filesToCheck }

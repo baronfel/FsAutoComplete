@@ -179,7 +179,7 @@ type FSharpCompilerServiceChecker(backgroundServiceEnabled) =
   member private __.GetNetFxScriptOptions(file, source) = async {
     logQueueLength optsLogger (Log.setMessage "Getting NetFX options for script file {file}" >> Log.addContextDestructured "file" file)
     let allFlags = Array.append [| "--targetprofile:mscorlib" |] fsiAdditionalArguments
-    let! (opts, errors) = checker.GetProjectOptionsFromScript(file, SourceText.ofString source, assumeDotNetFramework = true, useFsiAuxLib = true, otherFlags = allFlags, userOpName = "getNetFrameworkScriptOptions")
+    let! (opts, errors) = checker.GetProjectOptionsFromScript(file, source, assumeDotNetFramework = true, useFsiAuxLib = true, otherFlags = allFlags, userOpName = "getNetFrameworkScriptOptions")
     let allModifications = addLoadedFiles >> resolveRelativeFilePaths
     return allModifications opts, errors
   }
@@ -187,7 +187,7 @@ type FSharpCompilerServiceChecker(backgroundServiceEnabled) =
   member private __.GetNetCoreScriptOptions(file, source) = async {
     logQueueLength optsLogger (Log.setMessage "Getting NetCore options for script file {file}" >> Log.addContextDestructured "file" file)
     let allFlags = Array.append [| "--targetprofile:netstandard" |] fsiAdditionalArguments
-    let! (opts, errors) = checker.GetProjectOptionsFromScript(file, SourceText.ofString source, assumeDotNetFramework = false, useSdkRefs = true, useFsiAuxLib = true, otherFlags = allFlags, userOpName = "getNetCoreScriptOptions")
+    let! (opts, errors) = checker.GetProjectOptionsFromScript(file, source, assumeDotNetFramework = false, useSdkRefs = true, useFsiAuxLib = true, otherFlags = allFlags, userOpName = "getNetCoreScriptOptions")
     let allModifications = replaceFrameworkRefs >> addLoadedFiles >> resolveRelativeFilePaths
     return allModifications opts, errors
   }
@@ -242,14 +242,12 @@ type FSharpCompilerServiceChecker(backgroundServiceEnabled) =
 
   member __.ParseFile(fn, source, fpo) =
     logQueueLength checkerLogger (Log.setMessage "ParseFile - {file}" >> Log.addContextDestructured "file" fn)
-    let source = SourceText.ofString source
     checker.ParseFile(fn, source, fpo)
 
   member __.ParseAndCheckFileInProject(filePath, version, source, options) =
     async {
       let opName = sprintf "ParseAndCheckFileInProject - %s" filePath
       logQueueLength checkerLogger (Log.setMessage "{opName}" >> Log.addContextDestructured "opName" opName)
-      let source = SourceText.ofString source
       let options = clearProjectReferences options
       let fixedFilePath = ensureAbsolutePath filePath
       try
@@ -269,7 +267,6 @@ type FSharpCompilerServiceChecker(backgroundServiceEnabled) =
   member __.TryGetRecentCheckResultsForFile(file, options, ?source) =
     let opName = sprintf "TryGetRecentCheckResultsForFile - %s" file
     logQueueLength checkerLogger (Log.setMessage "{opName}" >> Log.addContextDestructured "opName" opName)
-    let source = source |> Option.map SourceText.ofString
     let options = clearProjectReferences options
     checker.TryGetRecentCheckResultsForFile(file, options, ?sourceText=source, userOpName=opName)
     |> Option.map (fun (pr, cr, _) -> ParseAndCheckResults (pr, cr, entityCache))
@@ -294,7 +291,6 @@ type FSharpCompilerServiceChecker(backgroundServiceEnabled) =
 
   member __.GetDeclarations (fileName, source, options, version) = async {
     logQueueLength checkerLogger (Log.setMessage "GetDeclarations - {file}" >> Log.addContextDestructured "file" fileName)
-    let source = SourceText.ofString source
     let! parseResult = checker.ParseFile(fileName, source, options)
     return parseResult.GetNavigationItems().Declarations
   }

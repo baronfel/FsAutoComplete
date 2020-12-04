@@ -122,9 +122,8 @@ type FsharpLspServer(commands: Commands, lspClient: FSharpLspClient) =
                 let filePath = doc.GetFilePath()
                 let contentChange = p.ContentChanges |> Seq.tryLast
                 match contentChange, doc.Version with
-                | Some contentChange, Some version ->
-                    if contentChange.Range.IsNone && contentChange.RangeLength.IsNone then
-                        let content = contentChange.Text.Split('\n')
+                | Some { Range = None; RangeLength = None; Text = newText }, Some version ->
+                        let content = newText.Split('\n')
                         let tfmConfig = config.UseSdkScripts
                         logger.info (Log.setMessage "ParseFile - Parsing {file}" >> Log.addContextDestructured "file" filePath)
                         do! (commands.Parse filePath content version (Some tfmConfig) |> Async.Ignore)
@@ -133,7 +132,7 @@ type FsharpLspServer(commands: Commands, lspClient: FSharpLspClient) =
                         if config.UnusedOpensAnalyzer then  Async.Start (commands.CheckUnusedOpens filePath)
                         if config.UnusedDeclarationsAnalyzer then Async.Start (commands.CheckUnusedDeclarations filePath) //fire and forget this analyzer now that it's syncronous
                         if config.SimplifyNameAnalyzer then Async.Start (commands.CheckSimplifiedNames filePath)
-                    else
+                | Some _, Some _ ->
                         logger.warn (Log.setMessage "ParseFile - Parse not started, received partial change")
                 | _ ->
                     logger.info (Log.setMessage "ParseFile - Found no change for {file}" >> Log.addContextDestructured "file" filePath)
@@ -307,7 +306,7 @@ type FsharpLspServer(commands: Commands, lspClient: FSharpLspClient) =
         ) |> subscriptions.Add
 
     ///Helper function for handling Position requests using **recent** type check results
-    member x.positionHandler<'a, 'b when 'b :> ITextDocumentPositionParams> (f: 'b -> FcsRange.pos -> ParseAndCheckResults -> string -> string [] ->  AsyncLspResult<'a>) (arg: 'b) : AsyncLspResult<'a> =
+    member x.positionHandler<'a, 'b when 'b :> ITextDocumentPositionParams> (f: 'b -> FcsRange.pos -> ParseAndCheckResults -> string -> FileText ->  AsyncLspResult<'a>) (arg: 'b) : AsyncLspResult<'a> =
         async {
             let pos = arg.GetFcsPos()
             let file = arg.GetFilePath()
@@ -340,7 +339,7 @@ type FsharpLspServer(commands: Commands, lspClient: FSharpLspClient) =
         }
 
     ///Helper function for handling Position requests using **latest** type check results
-    member x.positionHandlerWithLatest<'a, 'b when 'b :> ITextDocumentPositionParams> (f: 'b -> FcsRange.pos -> ParseAndCheckResults -> string -> string [] ->  AsyncLspResult<'a>) (arg: 'b) : AsyncLspResult<'a> =
+    member x.positionHandlerWithLatest<'a, 'b when 'b :> ITextDocumentPositionParams> (f: 'b -> FcsRange.pos -> ParseAndCheckResults -> string -> FileText ->  AsyncLspResult<'a>) (arg: 'b) : AsyncLspResult<'a> =
         async {
             let pos = arg.GetFcsPos()
             let file = arg.GetFilePath()
@@ -376,7 +375,7 @@ type FsharpLspServer(commands: Commands, lspClient: FSharpLspClient) =
         }
 
     ///Helper function for handling file requests using **recent** type check results
-    member x.fileHandler<'a> (f: SourceFilePath -> ParseAndCheckResults -> string [] -> AsyncLspResult<'a>) (file: SourceFilePath) : AsyncLspResult<'a> =
+    member x.fileHandler<'a> (f: SourceFilePath -> ParseAndCheckResults -> FileText -> AsyncLspResult<'a>) (file: SourceFilePath) : AsyncLspResult<'a> =
         async {
 
             // logger.info (Log.setMessage "PositionHandler - Position request: {file} at {pos}" >> Log.addContextDestructured "file" file >> Log.addContextDestructured "pos" pos)
@@ -660,11 +659,9 @@ type FsharpLspServer(commands: Commands, lspClient: FSharpLspClient) =
 
         logger.info (Log.setMessage "TextDocumentDidChange Request: {parms}" >> Log.addContextDestructured "parms" filePath )
         match contentChange, doc.Version with
-        | Some contentChange, Some version ->
-            if contentChange.Range.IsNone && contentChange.RangeLength.IsNone then
-                let content = contentChange.Text.Split('\n')
-                commands.SetFileContent(filePath, content, Some version, config.ScriptTFM)
-            else ()
+        | Some { Range = None; RangeLength = None; Text = newText }, Some version ->
+            let content = newText.Split('\n')
+            commands.SetFileContent(filePath, content, Some version, config.ScriptTFM)
         | _ -> ()
 
         parseFileDebuncer.Bounce p
@@ -677,9 +674,9 @@ type FsharpLspServer(commands: Commands, lspClient: FSharpLspClient) =
     }
 
     override __.TextDocumentCompletion(p: CompletionParams) =
-      let ensureInBounds (lines: LineStr array) (line, col) =
+      let ensureInBounds (lines: FileText) (line, col) =
         let lineStr = lines.[line]
-        if line <= lines.Length && line >= 0 && col <= lineStr.Length + 1 && col >= 0
+        if line <= lines.Count && line >= 0 && col <= lineStr.Length + 1 && col >= 0
         then Ok ()
         else
           logger.info (Log.setMessage "TextDocumentCompletion Not OK:\n COL: {col}\n LINE_STR: {lineStr}\n LINE_STR_LENGTH: {lineStrLength}"
@@ -1078,9 +1075,9 @@ type FsharpLspServer(commands: Commands, lspClient: FSharpLspClient) =
         | Some (lines, formatted) ->
             let range =
                 let zero = { Line = 0; Character = 0 }
-                let endLine = Array.length lines - 1
+                let endLine = lines.Count - 1
                 let endCharacter =
-                    Array.tryLast lines
+                    Seq.tryLast lines
                     |> Option.map (fun line -> line.Length)
                     |> Option.defaultValue 0
                 { Start = zero; End = { Line = endLine; Character = endCharacter } }

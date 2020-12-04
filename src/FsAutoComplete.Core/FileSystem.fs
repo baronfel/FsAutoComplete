@@ -6,7 +6,9 @@ open System.IO
 open FsAutoComplete.Logging
 open System.Collections.Generic
 
-type FileLines (lines: string[]) =
+
+
+type FileLines (fileName, lines: string[]) =
   let mutable lineStarts = lazy (
     seq {
         let mutable startPos = 0;
@@ -37,6 +39,17 @@ type FileLines (lines: string[]) =
     | None ->
       None
 
+  let lengthToPos ((line, col): FSharp.Compiler.Range.Pos01) =
+    let lineLengths = lines |> Array.take (line + 1) |> Array.sumBy (fun l -> l.Length)
+    let newlineLengths = line // since this line is 0-based, it can also mean the number of newlines
+    lineLengths + newlineLengths + col
+
+  let spanLength startPos endPos =
+    lengthToPos endPos - lengthToPos startPos
+
+  let rangeLength ((startPos, endPos): FSharp.Compiler.Range.Range01) =
+    spanLength startPos endPos
+
   member _.LineStarts = lineStarts.Value
   member _.StringHash = stringHash.Value
 
@@ -48,19 +61,35 @@ type FileLines (lines: string[]) =
   member _.SubTextString(start, length) =
     backingString.Value.Substring(start, length)
 
-  member _.CharAsPosition (pos: int) =
+  member _.CharAtPosition (pos: int) =
     match lineNumberForIndex pos with
     | Some (lineNo, lineStartPos) ->
       let lineOffset = pos - lineStartPos
       Some lines.[lineNo].[lineOffset]
     | None -> None
-type FileText(lines: string []) =
-  let fileLines = FileLines lines
 
+  member _.TotalLength = totalLength.Value
+  member _.Item with get (line: int): string = lines.[line]
 
-  // member _.Lines =
+  member this.GetText(range: FSharp.Compiler.Range.range) =
+    let (startZero, _) as zeroRange = FSharp.Compiler.Range.Range.toZ range
+    let length = rangeLength zeroRange
+    let startPos = lengthToPos startZero - 1 // - 1 because the position is length-based, not zero-based
+    this.SubTextString(startPos, length)
 
+  member _.GetTextSpan(startPos, endPos) =
+    FSharp.Compiler.Range.mkRange fileName startPos endPos
+
+  member _.AllLines = lines
+
+type FileText(fileName: string, lines: string []) =
+  let fileLines = FileLines(fileName, lines)
+
+  member _.FileName = fileName
+  member _.Lines = fileLines
   member _.StringHash = fileLines.StringHash
+  member _.Count = lines.Length
+  member _.Item with get lineNo = fileLines.[lineNo]
 
   interface FSharp.Compiler.Text.ISourceText with
     member this.ContentEquals(sourceText: FSharp.Compiler.Text.ISourceText): bool =
@@ -79,62 +108,63 @@ type FileText(lines: string []) =
         lines.Length
 
     member this.GetLineString(lineIndex: int): string =
-        lines.[lineIndex]
+        lines.[lineIndex - 1]
 
     member this.GetSubTextString(start: int, length: int): string =
         fileLines.SubTextString(start, length)
 
     member this.Item
         with get (pos: int): char =
-            match lineNumberForIndex pos with
-            | Some (lineNo, lineStartPos) ->
-              let lineOffset = pos - lineStartPos
-              lines.[lineNo].[lineOffset]
-            | None -> invalidArg "pos" (sprintf "couldn't get char at position %d in text" pos)
+            match fileLines.CharAtPosition pos with
+            | Some c ->
+              c
+            | None ->
+              invalidArg "pos" (sprintf "couldn't get char at position %d in text" pos)
 
     member this.Length: int =
         lines.Length
 
     member this.SubTextEquals(target: string, startIndex: int): bool =
-        if startIndex < 0 || startIndex >= totalLength.Value then
+        if startIndex < 0 || startIndex >= fileLines.TotalLength then
             invalidArg "startIndex" "Out of range."
 
         if String.IsNullOrEmpty(target) then
             invalidArg "target" "Is null or empty."
 
         let lastIndex = startIndex + target.Length
-        if lastIndex <= startIndex || lastIndex >= totalLength.Value then
+        if lastIndex <= startIndex || lastIndex >= fileLines.TotalLength then
             invalidArg "target" "Too big."
 
-        backingString.Value.IndexOf(target, startIndex, target.Length) <> -1
+        fileLines.BackingString.IndexOf(target, startIndex, target.Length) <> -1
 
+  member _.GetText range = fileLines.GetText range
 
-  interface IReadOnlyList<string> with
-     member this.Count: int = lines.Length
-     member this.GetEnumerator(): Collections.IEnumerator =
+  interface IEnumerable<string> with
+    member this.GetEnumerator(): Collections.IEnumerator =
          lines.GetEnumerator()
      member this.GetEnumerator(): IEnumerator<string> =
           (seq {
             for line in lines do yield line
           }).GetEnumerator()
+
+  interface IReadOnlyList<string> with
+     member this.Count: int = lines.Length
      member this.Item
          with get (index: int): string =
-             failwith "Not Implemented"
+             fileLines.[index]
 
 
 type VolatileFile =
   { Touched: DateTime
-    Lines: FileText
+    Text: FileText
     Version: int option}
-
-open System.IO
 
 type FileSystem (actualFs: IFileSystem, tryFindFile: SourceFilePath -> VolatileFile option) =
     let getContent (filename: string) =
          filename
          |> tryFindFile
          |> Option.map (fun file ->
-              System.Text.Encoding.UTF8.GetBytes (String.Join ("\n", file.Lines)))
+              System.Text.Encoding.UTF8.GetBytes (String.Join ("\n", file.Text)))
 
     let fsLogger = LogProvider.getLoggerByName "FileSystem"
     /// translation of the BCL's Windows logic for Path.IsPathRooted.

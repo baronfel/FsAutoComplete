@@ -53,8 +53,7 @@ type Document =
       LineCount : int
       GetText : unit -> string
       GetLineText0 : int -> string
-      GetLineText1 : int -> string}
-
+      GetLineText1 : int -> string }
 
 type Serializer = obj -> string
 type ProjectFilePath = string
@@ -611,4 +610,9 @@ type [<Measure>] RepoPathSegment
 // OS-agnostic path segment from some repository root
 type [<Measure>] NormalizedRepoPathSegment
 
-(* ported rosyln members for sourcetext *)
+[<AutoOpen>]
+module RangeExt =
+  open FSharp.Compiler.Range
+
+  type range with
+    member x.Contains(pos: pos) = rangeContainsPos x pos
