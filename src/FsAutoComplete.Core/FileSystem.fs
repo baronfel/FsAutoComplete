@@ -2,11 +2,129 @@ namespace FsAutoComplete
 
 open FSharp.Compiler.AbstractIL.Internal.Library
 open System
+open System.IO
 open FsAutoComplete.Logging
+open System.Collections.Generic
+
+type FileLines (lines: string[]) =
+  let mutable lineStarts = lazy (
+    seq {
+        let mutable startPos = 0;
+        for line in lines do
+          yield startPos
+          startPos <- startPos + line.Length
+      }
+      |> Seq.toArray
+  )
+
+  let totalLength = lazy (
+    let mutable len = 0
+    for line in lines do
+      len <- len + line.Length
+
+    // handle newlines, 1 newline between each line except the last
+    if lines.Length = 0 then len else len + lines.Length - 1
+  )
+
+  let stringHash = lazy (hash lines)
+  let backingString = lazy (String.concat "\n" lines)
+
+  let lineNumberForIndex idx =
+    match lineStarts.Value |> Array.tryFindIndexBack (fun lineStart -> lineStart <= idx) with
+    | Some closestLineNumber ->
+      let closestLineStart = lineStarts.Value.[closestLineNumber]
+      Some(closestLineNumber, closestLineStart)
+    | None ->
+      None
+
+  member _.LineStarts = lineStarts.Value
+  member _.StringHash = stringHash.Value
+
+  member _.BackingString = backingString.Value
+
+  member _.CopyTo(sourceIndex, destination, destinationIndex, count) =
+    backingString.Value.CopyTo(sourceIndex, destination, destinationIndex, count)
+
+  member _.SubTextString(start, length) =
+    backingString.Value.Substring(start, length)
+
+  member _.CharAsPosition (pos: int) =
+    match lineNumberForIndex pos with
+    | Some (lineNo, lineStartPos) ->
+      let lineOffset = pos - lineStartPos
+      Some lines.[lineNo].[lineOffset]
+    | None -> None
+type FileText(lines: string []) =
+  let fileLines = FileLines lines
+
+
+  // member _.Lines =
+
+  member _.StringHash = fileLines.StringHash
+
+  interface FSharp.Compiler.Text.ISourceText with
+    member this.ContentEquals(sourceText: FSharp.Compiler.Text.ISourceText): bool =
+        match sourceText with
+        | :? FileText as ft when ft = this || this.StringHash = ft.StringHash -> true
+        | _ -> false
+
+    member this.CopyTo(sourceIndex: int, destination: char [], destinationIndex: int, count: int): unit =
+        fileLines.CopyTo(sourceIndex, destination, destinationIndex, count)
+
+    member this.GetLastCharacterPosition(): int * int =
+        if lines.Length = 0 then 0, 0
+        else lines.Length, lines.[lines.Length - 1].Length
+
+    member this.GetLineCount(): int =
+        lines.Length
+
+    member this.GetLineString(lineIndex: int): string =
+        lines.[lineIndex]
+
+    member this.GetSubTextString(start: int, length: int): string =
+        fileLines.SubTextString(start, length)
+
+    member this.Item
+        with get (pos: int): char =
+            match lineNumberForIndex pos with
+            | Some (lineNo, lineStartPos) ->
+              let lineOffset = pos - lineStartPos
+              lines.[lineNo].[lineOffset]
+            | None -> invalidArg "pos" (sprintf "couldn't get char at position %d in text" pos)
+
+    member this.Length: int =
+        lines.Length
+
+    member this.SubTextEquals(target: string, startIndex: int): bool =
+        if startIndex < 0 || startIndex >= totalLength.Value then
+            invalidArg "startIndex" "Out of range."
+
+        if String.IsNullOrEmpty(target) then
+            invalidArg "target" "Is null or empty."
+
+        let lastIndex = startIndex + target.Length
+        if lastIndex <= startIndex || lastIndex >= totalLength.Value then
+            invalidArg "target" "Too big."
+
+        backingString.Value.IndexOf(target, startIndex, target.Length) <> -1
+
+
+  interface IReadOnlyList<string> with
+     member this.Count: int = lines.Length
+     member this.GetEnumerator(): Collections.IEnumerator =
+         lines.GetEnumerator()
+     member this.GetEnumerator(): IEnumerator<string> =
+          (seq {
+            for line in lines do yield line
+          }).GetEnumerator()
+     member this.Item
+         with get (index: int): string =
+             failwith "Not Implemented"
+
 
 type VolatileFile =
   { Touched: DateTime
-    Lines: string []
+    Lines: FileText
     Version: int option}
 
 open System.IO

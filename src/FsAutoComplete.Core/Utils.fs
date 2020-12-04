@@ -610,3 +610,5 @@ type [<Measure>] Url
 type [<Measure>] RepoPathSegment
 // OS-agnostic path segment from some repository root
 type [<Measure>] NormalizedRepoPathSegment
+
+(* ported rosyln members for sourcetext *)
