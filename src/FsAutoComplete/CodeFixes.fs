@@ -988,3 +988,20 @@ module Fixes =
       }
       |> AsyncResult.foldResult id (fun _ -> [])
     ) (Set.ofList ["10"])
+
+  let expandType
+    (getParseResultsForFile: string -> FSharp.Compiler.Range.pos -> Async<Result<ParseAndCheckResults * string * string array, string>>)
+    : CodeFix =
+    fun codeActionParams ->
+      asyncResult {
+        let fileName = codeActionParams.TextDocument.GetFilePath()
+        let fcsPos = protocolRangeToRange fileName codeActionParams.Range
+        let! (tyRes, line, lines) = getParseResultsForFile fileName fcsPos.End
+        let! rangesAndReplacements = tyRes.ExpandSignatures fcsPos.Start
+        return [ { Title = "Expand type signatures"
+                   File = codeActionParams.TextDocument
+                   SourceDiagnostic = None
+                   Kind = Refactor
+                   Edits = rangesAndReplacements |> Array.map (fun (range, text) -> { Range = fcsRangeToLsp range; NewText = text }) } ]
+      }
+      |> AsyncResult.foldResult id (fun _ -> [])

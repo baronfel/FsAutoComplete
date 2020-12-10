@@ -409,6 +409,108 @@ type ParseAndCheckResults
       return! checkResults.GetSymbolUseAtLocation(pos.Line, colu, lineStr, identIsland)
   }
 
+  member x.ExpandSignatures (pos: pos) = async {
+    let rec tyOfRatConst =
+      function
+      | SynRationalConst.Integer i -> string i
+      | SynRationalConst.Rational(num, dem, range) -> $"{num}/{dem}"
+      | SynRationalConst.Negate(rat) -> $"-{tyOfRatConst rat}"
+
+    let tyOfTyArg (SynTypar.Typar(i, _, _)) = i.idText
+
+    let rec typeOfMeasure =
+      function
+      | SynMeasure.Anon _ -> "_"
+      | SynMeasure.Named(longId, range) ->
+        longId
+        |> List.map (fun i -> i.idText)
+        |> String.concat "."
+      | SynMeasure.Product(left, right, range) ->
+        $"{typeOfMeasure left}*{typeOfMeasure right}"
+      | SynMeasure.Seq(measures, range) ->
+        $"""[{measures |> List.map typeOfMeasure |> String.concat ","}]"""
+      | SynMeasure.Divide(num, div, range) ->
+        $"{typeOfMeasure num}/{typeOfMeasure div}"
+      | SynMeasure.Power(bas, rat, range) ->
+        $"{typeOfMeasure bas} ** {tyOfRatConst rat}"
+      | SynMeasure.One -> "1"
+      | SynMeasure.Var(tyArg, range) -> tyOfTyArg tyArg
+
+    let rec typeForConst =
+      function
+      | SynConst.Bool _ -> "bool"
+      | SynConst.Unit _ -> "unit"
+      | SynConst.SByte _ -> "sbyte"
+      | SynConst.Byte b -> "byte"
+      | SynConst.Int16 i -> "int16"
+      | SynConst.UInt16 u -> "uint16"
+      | SynConst.Int32 i -> "int"
+      | SynConst.UInt32 u -> "uint"
+      | SynConst.Int64 i -> "int64"
+      | SynConst.UInt64 u -> "uint64"
+      | SynConst.IntPtr i -> "nativeint"
+      | SynConst.UIntPtr u -> "unativeint"
+      | SynConst.Single s -> "float32"
+      | SynConst.Double d -> "float64"
+      | SynConst.Char c -> "char"
+      | SynConst.Decimal d -> "decimal"
+      | SynConst.UserNum(value, suffix) -> suffix
+      | SynConst.String(text, range) -> "string"
+      | SynConst.Bytes(bytes, range) -> "byte[]"
+      | SynConst.UInt16s uints -> "uint16[]"
+      | SynConst.Measure (constant, measure) ->
+        $"{typeForConst constant}<{typeOfMeasure measure}>"
+
+    let rec constVal =
+      function
+      | SynConst.Bool b -> $"{b}"
+      | SynConst.Unit -> $"()"
+      | SynConst.SByte sb -> $"{sb}"
+      | SynConst.Byte b -> $"{b}"
+      | SynConst.Int16 i -> $"{i}"
+      | SynConst.UInt16 u -> $"{u}"
+      | SynConst.Int32 i -> $"{i}"
+      | SynConst.UInt32 u -> $"{u}"
+      | SynConst.Int64 i -> $"{i}"
+      | SynConst.UInt64 u -> $"{u}"
+      | SynConst.IntPtr i -> $"{i}"
+      | SynConst.UIntPtr u -> $"{u}"
+      | SynConst.Single s -> $"{s}"
+      | SynConst.Double d -> $"{d}"
+      | SynConst.Char c -> $"{c}"
+      | SynConst.Decimal d -> $"{d}"
+      | SynConst.UserNum(value, suffix) -> $"{value}"
+      | SynConst.String(text, range) -> $"{text}"
+      | SynConst.Bytes(bytes, range) -> $"{bytes}"
+      | SynConst.UInt16s uints -> $"{uints}"
+      | SynConst.Measure(constant, measure) ->
+        constVal constant
+
+    let constTypSig (c: SynConst) =
+      $"{constVal c}: {typeForConst c}"
+
+    let results = ResizeArray()
+    parseResults.ParseTree
+    |> Option.bind (fun input ->
+      AstTraversal.Traverse(
+        pos,
+        input,
+        { new AstTraversal.AstVisitorBase<_>() with
+            member _.VisitExpr (_, _, def, expr) =
+              match expr with
+              | SynExpr.Typed _ -> None
+              | SynExpr.Paren(SynExpr.Typed(_), _, _, _) -> None
+              | SynExpr.Const(c, r) ->
+                results.Add (r, constTypSig c)
+                None
+              | _ -> def expr
+          }
+      )
+    )
+    |> Option.iter ignore
+    return results.ToArray()
+  }
+
   member x.TryGetSymbolUseAndUsages (pos: pos) (lineStr: LineStr) = async {
     let! symboluse = x.TryGetSymbolUse pos lineStr
     match symboluse with
