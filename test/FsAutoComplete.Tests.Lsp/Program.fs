@@ -10,6 +10,7 @@ open FsAutoComplete.Tests.CoreTest
 open FsAutoComplete.Tests.ScriptTest
 open FsAutoComplete.Tests.ExtensionsTests
 open FsAutoComplete.Tests.InteractiveDirectivesTests
+open FsAutoComplete.Tests.Formatting
 
 ///Global list of tests
 let tests toolsPath =
@@ -39,6 +40,7 @@ let tests toolsPath =
     formattingTests toolsPath
     fakeInteropTests toolsPath
     analyzerTests toolsPath
+    signatureFormattingTests
   ]
 
 

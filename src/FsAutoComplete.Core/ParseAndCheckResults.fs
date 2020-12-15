@@ -337,7 +337,7 @@ type ParseAndCheckResults
         | Some (signature, footer, cn) ->
             match symbol with
             | SymbolUse.TypeAbbreviation symbol ->
-              return Ok (None, Some (symbol.GetAbbriviatedParent().XmlDocSig, symbol.GetAbbriviatedParent().Assembly.FileName |> Option.defaultValue ""), signature, footer, cn)
+              return Ok (None, Some (symbol.GetAbbreviatedParent().XmlDocSig, symbol.GetAbbreviatedParent().Assembly.FileName |> Option.defaultValue ""), signature, footer, cn)
             | _ ->
               return Ok (Some tip, None, signature, footer, cn)
   }

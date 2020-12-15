@@ -27,9 +27,23 @@ module DocumentationFormatter =
     let internal formatLink (name: string) xmlDocSig assemblyName =
         if assemblyName = "-" || xmlDocSig = "_" then name, name.Length
         else
-            let content = sprintf """[{ "XmlDocSig": "%s", "AssemblyName": "%s"}]""" xmlDocSig assemblyName
-            let cnt = Uri.EscapeDataString content
-            sprintf "<a href='command:fsharp.showDocumentation?%s'>%s</a>" cnt name, name.Length
+            let content: string =
+              // converting to json here escapes any quotes in the payload
+              Newtonsoft.Json.JsonConvert.SerializeObject
+                 [| {| XmlDocSig = xmlDocSig
+                       AssemblyName = assemblyName |} |]
+            let content = Uri.EscapeDataString content
+            $"""<a href="command:fsharp.showDocumentation?%s{content}">%s{name}</a>""", name.Length
+
+    // replace usages of `'t list` with `List<'t>` in type sigs, for a set of compiler-blessed type that render this way by default
+    let scrubOcamlTypeSigs (t: string) =
+      let t = Regex.Replace(t, """(.*) list""", "List<")
+      let t = Regex.Replace(t, """(.*) option""", "Option<")
+      let t = Regex.Replace(t, """(.*) lazy""", "Lazy<")
+      let t = Regex.Replace(t, """(.*) seq""", "Seq<")
+      let t = Regex.Replace(t, """(.*) ?\[\]""", "Array<")
+      let t = Regex.Replace(t, """<.*>""", "<")
+      t
 
     let rec formatType displayContext (typ : FSharpType) : (string*int) list =
         let typ2 = if typ.IsAbbreviation then typ.AbbreviatedType else typ
@@ -59,12 +73,7 @@ module DocumentationFormatter =
                 typ.GenericArguments
                 |> Seq.collect (formatType displayContext)
             let org = typ.Format displayContext
-            let t = Regex.Replace(org, """(.*?) list""", "List<")
-            let t = Regex.Replace(t, """(.*?) option""", "Option<")
-            let t = Regex.Replace(t, """(.*?) lazy""", "Lazy<")
-            let t = Regex.Replace(t, """(.*?) seq""", "Seq<")
-            let t = Regex.Replace(t, """(.*?) ?\[\]""", "Array<")
-            let t = Regex.Replace(t, """<.*>""", "<")
+            let t = scrubOcamlTypeSigs org
             [ yield formatLink t xmlDocSig assemblyName
               if t.EndsWith "<" then
                   yield! r
@@ -683,7 +692,7 @@ module DocumentationFormatter =
         match symbol with
         | SymbolUse.TypeAbbreviation (fse) ->
             try
-                let parent = fse.GetAbbriviatedParent()
+                let parent = fse.GetAbbreviatedParent()
                 match parent with
                 | FSharpEntity (ent, _, _) ->
                     let signature = getEntitySignature symbol.DisplayContext ent

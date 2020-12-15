@@ -18,6 +18,7 @@
     <Compile Include="CoreTests.fs" />
     <Compile Include="ScriptTests.fs" />
     <Compile Include="ExtensionsTests.fs" />
+    <Compile Include="FormattingTests.fs" />
     <Compile Include="InteractiveDirectivesTests.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
