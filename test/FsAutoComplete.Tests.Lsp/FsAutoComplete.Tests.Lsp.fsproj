@@ -15,6 +15,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Helpers.fs" />
+    <Compile Include="CodefixTests.fs" />
     <Compile Include="CoreTests.fs" />
     <Compile Include="ScriptTests.fs" />
     <Compile Include="ExtensionsTests.fs" />

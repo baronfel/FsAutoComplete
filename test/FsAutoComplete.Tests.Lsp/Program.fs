@@ -7,6 +7,7 @@ open System
 open Serilog.Core
 open Serilog.Events
 open FsAutoComplete.Tests.CoreTest
+open FsAutoComplete.Tests.CodeFixTests
 open FsAutoComplete.Tests.ScriptTest
 open FsAutoComplete.Tests.ExtensionsTests
 open FsAutoComplete.Tests.InteractiveDirectivesTests
@@ -39,6 +40,8 @@ let tests toolsPath =
     formattingTests toolsPath
     fakeInteropTests toolsPath
     analyzerTests toolsPath
+
+    codeFixTests toolsPath
   ]
 
 
