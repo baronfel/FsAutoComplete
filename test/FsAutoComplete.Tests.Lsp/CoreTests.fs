@@ -20,7 +20,10 @@ let initTests toolsPath =
         RootUri = None
         InitializationOptions = Some (Server.serialize defaultConfigDto)
         Capabilities = Some clientCaps
-        trace = None}
+        trace = None
+        ClientInfo = Some { Name = "Initialize Tests"; Version = Some "latest" }
+        Locale = None
+        WorkspaceFolders = Some [| { Uri = $"file://{__SOURCE_DIRECTORY__}"; Name = "init test" } |] }
 
     let result = server.Initialize p |> Async.RunSynchronously
     match result with

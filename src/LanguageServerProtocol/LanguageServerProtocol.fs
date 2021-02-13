@@ -703,13 +703,31 @@ module Types =
         Experimental: JToken option
     }
 
+    type ClientInfo = {
+      Name: string
+      Version: string option
+    }
+
+
+    type WorkspaceFolder = {
+        /// The associated URI for this workspace folder.
+        Uri: string;
+
+        /// The name of the workspace folder. Defaults to the
+        /// uri's basename.
+        Name: string;
+    }
+
     type InitializeParams = {
         ProcessId: int option
+        ClientInfo: ClientInfo option
+        Locale: string option
         RootPath: string option
         RootUri: string option
         InitializationOptions: JToken option
         Capabilities: ClientCapabilities option
         trace: string option
+        WorkspaceFolders: WorkspaceFolder [] option
     }
 
     type InitializedParams() =
@@ -1057,15 +1075,6 @@ module Types =
     type DidChangeWatchedFilesParams = {
         /// The actual file events.
         Changes: FileEvent[]
-    }
-
-    type WorkspaceFolder = {
-        /// The associated URI for this workspace folder.
-        Uri: string;
-
-        /// The name of the workspace folder. Defaults to the
-        /// uri's basename.
-        Name: string;
     }
 
     /// The workspace folder change event.

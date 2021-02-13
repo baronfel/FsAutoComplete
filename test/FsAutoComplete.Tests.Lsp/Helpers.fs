@@ -271,7 +271,13 @@ let serverInitialize path (config: FSharpConfigDto) toolsPath =
       RootUri = Some (sprintf "file://%s" path)
       InitializationOptions = Some (Server.serialize config)
       Capabilities = Some clientCaps
-      trace = None}
+      trace = None
+      ClientInfo = Some {
+        Name = "FSAC Tests"
+        Version = Some "latest"
+      }
+      Locale = None
+      WorkspaceFolders = Some [| { Uri = sprintf "file://%s" path; Name = Path.GetFileName path } |] }
 
   let result = server.Initialize p |> Async.RunSynchronously
   match result with

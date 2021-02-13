@@ -430,9 +430,11 @@ type FsharpLspServer(commands: Commands, lspClient: FSharpLspClient) =
         logger.info (Log.setMessage "Initialize Request {p}" >> Log.addContextDestructured "p" p )
 
         let actualRootPath =
-          match p.RootUri with
-          | Some rootUri -> Some (Path.FileUriToLocalPath rootUri)
-          | None -> p.RootPath
+          match p.WorkspaceFolders |> Option.bind Array.tryHead with
+          | Some { Uri = folderUri } -> Some (Path.FileUriToLocalPath folderUri)
+          | None -> match p.RootUri with
+                    | Some rootUri -> Some (Path.FileUriToLocalPath rootUri)
+                    | None -> p.RootPath
 
         commands.StartBackgroundService actualRootPath
         rootPath <- actualRootPath
