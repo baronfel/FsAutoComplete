@@ -692,6 +692,22 @@ module Types =
         SemanticTokens: SemanticTokensClientCapabilities option
     }
 
+    type MessageActionItemCapabilities = {
+      AdditionalPropertiesSupport: bool option
+    }
+    type ShowMessageRequestClientCapabilities = {
+      MessageActionItem: MessageActionItemCapabilities option
+    }
+
+    type ShowDocumentClientCapabilities = {
+      Support: bool
+    }
+
+    type WindowClientCapabilities = {
+      ShowMessage: ShowMessageRequestClientCapabilities option
+      ShowDocument: ShowDocumentClientCapabilities option
+    }
+
     type ClientCapabilities = {
         /// Workspace specific client capabilities.
         Workspace: WorkspaceClientCapabilities option
@@ -701,6 +717,8 @@ module Types =
 
         /// Experimental client capabilities.
         Experimental: JToken option
+
+        Window: WindowClientCapabilities option
     }
 
     type InitializeParams = {
@@ -986,6 +1004,29 @@ module Types =
     type ShowMessageParams = {
         Type: MessageType
         Message: string
+    }
+
+    type ShowDocumentParams = {
+      /// The document uri to show.
+      Uri: Uri
+      /// Indicates to show the resource in an external program.
+      /// To show for example `https://code.visualstudio.com/`
+      /// in the default WEB browser set `external` to `true`.
+      External: bool option
+      /// An optional property to indicate whether the editor
+      /// showing the document should take focus or not.
+      /// Clients might ignore this property if an external
+      /// program is started.
+      TakeFocus: bool option
+      /// An optional selection range if the document is a text
+      /// document. Clients might ignore the property if an
+      /// external program is started or the file is not a text
+      /// file.
+      Selection: Range option
+    }
+
+    type ShowDocumentResult  = {
+      Success: bool
     }
 
     type MessageActionItem = {
@@ -2173,6 +2214,11 @@ type LspClient() =
     abstract member WindowLogMessage: LogMessageParams -> Async<unit>
     default __.WindowLogMessage(_) = ignoreNotification
 
+    /// The show document request is sent from a server to a client to ask the client to display
+    /// a particular document in the user interface.
+    abstract member WindowShowDocument: ShowDocumentParams -> AsyncLspResult<ShowDocumentResult>
+    default __.WindowShowDocument(_) = notImplemented
+
     /// The telemetry notification is sent from the server to the client to ask the client to log
     /// a telemetry event.
     abstract member TelemetryEvent: Newtonsoft.Json.Linq.JToken -> Async<unit>
@@ -2241,8 +2287,6 @@ type LspClient() =
     /// on the client side.
     abstract member TextDocumentPublishDiagnostics: PublishDiagnosticsParams -> Async<unit>
     default __.TextDocumentPublishDiagnostics(_) = ignoreNotification
-
-
 
 [<AbstractClass>]
 type LspServer() =

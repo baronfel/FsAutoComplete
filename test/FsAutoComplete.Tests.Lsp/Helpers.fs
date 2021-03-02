@@ -197,10 +197,15 @@ let clientCaps : ClientCapabilities =
       SelectionRange = Some dynCaps
       SemanticTokens = Some semanticTokensCaps }
 
+  let windowCaps = {
+    ShowMessage = Some { MessageActionItem = Some { AdditionalPropertiesSupport = Some true }  }
+    ShowDocument = Some { Support = true }
+  }
 
   { Workspace = Some workspaceCaps
     TextDocument = Some textCaps
-    Experimental = None}
+    Experimental = None
+    Window = Some windowCaps }
 
 open Expecto.Logging
 open Expecto.Logging.Message
