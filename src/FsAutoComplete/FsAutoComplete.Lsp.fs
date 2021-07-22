@@ -1332,7 +1332,7 @@ type FSharpLspServer(backgroundServiceEnabled: bool, state: State, lspClient: FS
                         return
                           { p with Command = None }
                           |> success
-                    | CoreResponse.Res (typ, parms, _) ->
+                    | CoreResponse.Res { FormattedReturnType = typ; FormattedParameterGroups = parms; } ->
                         let formatted = SigantureData.formatSignature typ parms
                         let cmd = { Title = formatted; Command = ""; Arguments = None }
                         return
@@ -1489,7 +1489,7 @@ type FSharpLspServer(backgroundServiceEnabled: bool, state: State, lspClient: FS
           match commands.SignatureData tyRes pos lineStr with
           | CoreResponse.InfoRes msg | CoreResponse.ErrorRes msg ->
               LspResult.internalError msg
-          | CoreResponse.Res (typ, parms, generics) ->
+          | CoreResponse.Res { FormattedReturnType = typ; FormattedParameterGroups = parms; FormattedTypeParameters = generics } ->
               { Content =  CommandResponse.signatureData FsAutoComplete.JsonSerializer.writeJson (typ, parms, generics) }
               |> success
           |> async.Return
@@ -1497,8 +1497,8 @@ type FSharpLspServer(backgroundServiceEnabled: bool, state: State, lspClient: FS
 
     member x.FSharpDocumentationGenerator(p: TextDocumentPositionParams) =
       p |> x.positionHandler (fun p pos tyRes lineStr lines -> asyncResult {
-         let! response = commands.GenerateXmlDocumentation(tyRes, pos, lineStr) |> AsyncResult.ofStringErr
-         let insertPosition = fcsPosToLsp response.insertPosition
+         let! { InsertPosition = fcsInsertPos; Text = xmlDoc } = commands.GenerateXmlDocumentation(tyRes, pos, lineStr) |> AsyncResult.ofStringErr
+         let insertPosition = fcsPosToLsp fcsInsertPos
          let edit: ApplyWorkspaceEditParams = {
            Label = Some "Generate XML Documentation"
            Edit = {
@@ -1510,7 +1510,7 @@ type FSharpLspServer(backgroundServiceEnabled: bool, state: State, lspClient: FS
                  }
                  Edits = [| {
                      Range = { Start = insertPosition; End = insertPosition}
-                     NewText = response.xmlDoc
+                     NewText = xmlDoc
                    }
                  |]
                }
@@ -1545,7 +1545,7 @@ type FSharpLspServer(backgroundServiceEnabled: bool, state: State, lspClient: FS
           match commands.SignatureData tyRes pos lineStr with
           | CoreResponse.InfoRes msg | CoreResponse.ErrorRes msg ->
               LspResult.internalError msg
-          | CoreResponse.Res(typ, parms, generics) ->
+          | CoreResponse.Res { FormattedReturnType = typ; FormattedParameterGroups = parms; FormattedTypeParameters = generics } ->
               { Content =  CommandResponse.signatureData FsAutoComplete.JsonSerializer.writeJson (typ, parms, generics) }
               |> success
           |> async.Return

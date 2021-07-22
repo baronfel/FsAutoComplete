@@ -16,6 +16,12 @@ type FindDeclarationResult =
     /// The declaration refers to a file.
     | File of string
 
+type SignatureData =
+  { FormattedReturnType: string
+    /// list of curried parameter groups. the tuples contain (parameter name, formatted parameter type).
+    FormattedParameterGroups: list<list<string * string>>
+    FormattedTypeParameters: list<string> }
+
 type ParseAndCheckResults
     (
         parseResults: FSharpParseFileResults,
@@ -371,7 +377,7 @@ type ParseAndCheckResults
       let symboluses = checkResults.GetUsesOfSymbolInFile symboluse.Symbol
       Ok (symboluse, symboluses)
 
-  member __.TryGetSignatureData (pos: Pos) (lineStr: LineStr) =
+  member __.TryGetSignatureData (pos: Pos) (lineStr: LineStr): Result<SignatureData, string> =
     match Lexer.findLongIdents(pos.Column - 1, lineStr) with
     | None ->
       ResultOrString.Error "No ident at this location"
@@ -388,7 +394,7 @@ type ParseAndCheckResults
         | :? FSharpMemberOrFunctionOrValue as symbol ->
           let typ = symbol.ReturnParameter.Type.Format (symboluse.DisplayContext.WithPrefixGenericParameters())
           if symbol.IsPropertyGetterMethod then
-              Ok(typ, [], [])
+              Ok { FormattedReturnType = typ; FormattedParameterGroups = []; FormattedTypeParameters = [] }
           else
             let parms =
               symbol.CurriedParameterGroups
@@ -404,12 +410,12 @@ type ParseAndCheckResults
             // as parameters.
             match parms with
             | [ [] ] when symbol.IsMember && (not symbol.IsPropertyGetterMethod) ->
-              Ok(typ, [ [ ("unit", "unit") ] ], [])
+              Ok({ FormattedReturnType = typ; FormattedParameterGroups = [ [ ("unit", "unit") ] ]; FormattedTypeParameters = []})
             | _ ->
-              Ok(typ, parms, generics)
+              Ok({ FormattedReturnType = typ; FormattedParameterGroups = parms; FormattedTypeParameters = generics})
         | :? FSharpField as symbol ->
           let typ = symbol.FieldType.Format symboluse.DisplayContext
-          Ok(typ, [], [])
+          Ok { FormattedReturnType = typ; FormattedParameterGroups = []; FormattedTypeParameters = [] }
         | _ ->
           ResultOrString.Error "Not a member, function or value"
 

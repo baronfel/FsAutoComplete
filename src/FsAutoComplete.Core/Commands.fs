@@ -33,6 +33,8 @@ type CoreResponse<'a> =
     | ErrorRes of text: string
     | Res of 'a
 
+type DocumentEdit = { InsertPosition: pos; Text: string }
+
 module Result =
   let ofCoreResponse (r: CoreResponse<'a>) =
     match r with
@@ -791,7 +793,7 @@ type Commands (checker: FSharpCompilerServiceChecker, state: State, backgroundSe
         let trimmed = lineStr.TrimStart(' ')
         let indentLength = lineStr.Length - trimmed.Length
         let indentString = String.replicate indentLength " "
-        let! (_typ, parameters, generics) = x.SignatureData tyRes triggerPosition lineStr |> Result.ofCoreResponse
+        let! { FormattedReturnType = _typ; FormattedParameterGroups = parameters; FormattedTypeParameters = generics} = x.SignatureData tyRes triggerPosition lineStr |> Result.ofCoreResponse
         let summarySection = "/// <summary></summary>"
         let parameterSection (name, _type) = $"/// <param name=\"%s{name}\"></param>"
         let genericArg name = $"/// <typeparam name=\"'%s{name}\"></typeparam>"
@@ -819,7 +821,7 @@ type Commands (checker: FSharpCompilerServiceChecker, state: State, backgroundSe
            |> String.concat Environment.NewLine
 
         let insertPosition = Pos.mkPos triggerPosition.Line indentLength
-        return {| insertPosition = insertPosition; xmlDoc = formattedXmlDoc |}
+        return { InsertPosition = insertPosition; Text = formattedXmlDoc }
       }
 
     member x.Help (tyRes : ParseAndCheckResults) (pos: Pos) lineStr =
