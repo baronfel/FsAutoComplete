@@ -33,7 +33,16 @@ type CoreResponse<'a> =
     | ErrorRes of text: string
     | Res of 'a
 
+module Result =
+  let ofCoreResponse (r: CoreResponse<'a>) =
+    match r with
+    | CoreResponse.Res a -> Ok a
+    | CoreResponse.ErrorRes msg
+    | CoreResponse.InfoRes msg -> Error msg
+
 module AsyncResult =
+  let ofCoreResponse (ar: Async<CoreResponse<'a>>) =
+    ar |> Async.map Result.ofCoreResponse
 
   let inline mapErrorRes ar: Async<CoreResponse<'a>> =
     AsyncResult.foldResult id CoreResponse.ErrorRes ar
@@ -774,6 +783,44 @@ type Commands (checker: FSharpCompilerServiceChecker, state: State, backgroundSe
     member x.SignatureData (tyRes : ParseAndCheckResults) (pos: Pos) lineStr =
         tyRes.TryGetSignatureData pos lineStr
         |> Result.bimap CoreResponse.Res CoreResponse.ErrorRes
+
+    /// for a given member, use its signature information to generate placeholder XML documentation strings.
+    /// calculates the required indent and gives the position to insert the text.
+    member x.GenerateXmlDocumentation (tyRes: ParseAndCheckResults, triggerPosition: Pos, lineStr: LineStr) =
+      asyncResult {
+        let trimmed = lineStr.TrimStart(' ')
+        let indentLength = lineStr.Length - trimmed.Length
+        let indentString = String.replicate indentLength " "
+        let! (_typ, parameters, generics) = x.SignatureData tyRes triggerPosition lineStr |> Result.ofCoreResponse
+        let summarySection = "/// <summary></summary>"
+        let parameterSection (name, _type) = $"/// <param name=\"%s{name}\"></param>"
+        let genericArg name = $"/// <typeparam name=\"'%s{name}\"></typeparam>"
+        let returnsSection = "/// <returns></returns>"
+        let formattedXmlDoc =
+          seq {
+              yield summarySection
+              match parameters with
+              | [] -> ()
+              | parameters ->
+                yield!
+                  parameters
+                  |> List.concat
+                  |> List.mapi (fun _index parameter -> parameterSection parameter)
+              match generics with
+              | [] -> ()
+              | generics ->
+                yield!
+                  generics
+                  |> List.mapi (fun _index generic -> genericArg generic)
+              yield returnsSection
+              yield Environment.NewLine // trailing newline so that we can insert on the position of the triggering line
+           }
+           |> Seq.map (fun s -> indentString + s)
+           |> String.concat Environment.NewLine
+
+        let insertPosition = Pos.mkPos triggerPosition.Line indentLength
+        return {| insertPosition = insertPosition; xmlDoc = formattedXmlDoc |}
+      }
 
     member x.Help (tyRes : ParseAndCheckResults) (pos: Pos) lineStr =
         tyRes.TryGetF1Help pos lineStr

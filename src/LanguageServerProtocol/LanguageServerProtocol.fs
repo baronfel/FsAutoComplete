@@ -1156,6 +1156,14 @@ module Types =
     type ApplyWorkspaceEditResponse = {
         /// Indicates whether the edit was applied or not.
         Applied: bool
+        /// An optional textual description for why the edit was not applied.
+        /// This may be used by the server for diagnostic logging or to provide
+        /// a suitable error for a request that triggered the edit.
+        FailureResponse: string option
+        /// Depending on the client's failure handling strategy `failedChange`
+        /// might contain the index of the change that failed. This property is
+        /// only available if the client signals a `failureHandling` strategy in its client capabilities.
+        FailedChange: uint option
     }
 
     /// Represents reasons why a text document is saved.

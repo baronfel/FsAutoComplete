@@ -26,20 +26,13 @@ type FcsRange = FSharp.Compiler.Text.Range
 module FcsPos = FSharp.Compiler.Text.Pos
 type FcsPos = FSharp.Compiler.Text.Pos
 
+
 module Result =
-  let ofCoreResponse (r: CoreResponse<'a>) =
-    match r with
-    | CoreResponse.Res a -> Ok a
-    | CoreResponse.ErrorRes msg
-    | CoreResponse.InfoRes msg -> Error (JsonRpc.Error.InternalErrorMessage msg)
+  let ofStringErr (r: Result<'a, string>) = r |> Result.mapError JsonRpc.Error.InternalErrorMessage
 
 module AsyncResult =
-  let ofCoreResponse (ar: Async<CoreResponse<'a>>) =
-    ar |> Async.map Result.ofCoreResponse
-
   let ofStringErr (ar: Async<Result<'a, string>>) =
-    ar |> AsyncResult.mapError JsonRpc.Error.InternalErrorMessage
-
+    ar |> Async.map Result.ofStringErr
 
 type FSharpLspClient(sendServerNotification: ClientNotificationSender, sendServerRequest: ClientRequestSender) =
     inherit LspClient ()
@@ -1006,7 +999,7 @@ type FSharpLspServer(backgroundServiceEnabled: bool, state: State, lspClient: FS
         logger.info (Log.setMessage "TextDocumentRename Request: {parms}" >> Log.addContextDestructured "parms" p )
         p |> x.positionHandler (fun p pos tyRes lineStr lines ->
             asyncResult {
-                match! commands.SymbolUseProject tyRes pos lineStr |> AsyncResult.ofCoreResponse with
+                match! commands.SymbolUseProject tyRes pos lineStr |> AsyncResult.ofCoreResponse |> AsyncResult.ofStringErr with
                 | LocationResponse.Use (_, uses) ->
                     let documentChanges =
                         uses
@@ -1098,7 +1091,7 @@ type FSharpLspServer(backgroundServiceEnabled: bool, state: State, lspClient: FS
         logger.info (Log.setMessage "TextDocumentReferences Request: {parms}" >> Log.addContextDestructured "parms" p )
         p |> x.positionHandler (fun p pos tyRes lineStr lines ->
             asyncResult {
-                let! res = commands.SymbolUseProject tyRes pos lineStr |> AsyncResult.ofCoreResponse
+                let! res = commands.SymbolUseProject tyRes pos lineStr |> AsyncResult.ofCoreResponse |> AsyncResult.ofStringErr
                 let ranges: FSharp.Compiler.Text.Range [] =
                   match res with
                   | LocationResponse.Use (_, uses) -> uses |> Array.map (fun u -> u.RangeAlternate)
@@ -1134,7 +1127,7 @@ type FSharpLspServer(backgroundServiceEnabled: bool, state: State, lspClient: FS
         logger.info (Log.setMessage "TextDocumentImplementation Request: {parms}" >> Log.addContextDestructured "parms" p )
         p |> x.positionHandler (fun p pos tyRes lineStr lines ->
             asyncResult {
-                let! res = commands.SymbolImplementationProject tyRes pos lineStr |> AsyncResult.ofCoreResponse
+                let! res = commands.SymbolImplementationProject tyRes pos lineStr |> AsyncResult.ofCoreResponse |> AsyncResult.ofStringErr
                 let ranges: FSharp.Compiler.Text.Range [] =
                   match res with
                   | LocationResponse.Use (_, uses) -> uses |> Array.map (fun u -> u.RangeAlternate)
@@ -1502,51 +1495,10 @@ type FSharpLspServer(backgroundServiceEnabled: bool, state: State, lspClient: FS
           |> async.Return
         )
 
-    member x.FSharpGenerateXmlDocumentation(p: TextDocumentPositionParams) =
+    member x.FSharpDocumentationGenerator(p: TextDocumentPositionParams) =
       p |> x.positionHandler (fun p pos tyRes lineStr lines -> asyncResult {
-         let trimmed = lineStr.TrimStart(' ')
-         let indentLength = lineStr.Length - trimmed.Length
-         let indentString = String.replicate indentLength " "
-         let! (typ, parameters, generics) = commands.SignatureData tyRes pos lineStr |> Result.ofCoreResponse
-         let summarySection = [
-           "/// <summary>"
-           "/// $1"
-           "/// </summary>"
-         ]
-         let parameterSection index (name, _type) = $"/// <param name=\"%s{name}\">$%d{index}</param>"
-         let genericArg index name = $"/// <typeparam name=\"'%s{name}\">$%d{index}</typeparam>"
-         let returnsSection index = [
-           "/// <returns>"
-           $"/// $%d{index}"
-           "/// </returns>"
-         ]
-         let formattedXmlDoc =
-           seq {
-              let mutable tabStopCount = 0
-              yield! summarySection
-              tabStopCount <- 2
-              match parameters with
-              | [] -> ()
-              | parameters ->
-                yield!
-                  parameters
-                  |> List.concat
-                  |> List.mapi (fun index parameter -> parameterSection (index + tabStopCount) parameter)
-              tabStopCount <- tabStopCount + parameters.Length
-              match generics with
-              | [] -> ()
-              | generics ->
-                yield!
-                  generics
-                  |> List.mapi (fun index generic -> genericArg (index + tabStopCount) generic)
-              tabStopCount <- tabStopCount + generics.Length
-              yield! returnsSection tabStopCount
-              yield Environment.NewLine // trailing newline so that we can insert on the position of the triggering line
-           }
-           |> Seq.map (fun s -> indentString + s)
-           |> String.concat Environment.NewLine
-
-         let insertPosition = { Line = p.Position.Line; Character = indentLength }
+         let! response = commands.GenerateXmlDocumentation(tyRes, pos, lineStr) |> AsyncResult.ofStringErr
+         let insertPosition = fcsPosToLsp response.insertPosition
          let edit: ApplyWorkspaceEditParams = {
            Label = Some "Generate XML Documentation"
            Edit = {
@@ -1558,7 +1510,7 @@ type FSharpLspServer(backgroundServiceEnabled: bool, state: State, lspClient: FS
                  }
                  Edits = [| {
                      Range = { Start = insertPosition; End = insertPosition}
-                     NewText = formattedXmlDoc
+                     NewText = response.xmlDoc
                    }
                  |]
                }
@@ -1567,22 +1519,9 @@ type FSharpLspServer(backgroundServiceEnabled: bool, state: State, lspClient: FS
            }
          }
 
-         let! applyResponse = lspClient.WorkspaceApplyEdit edit
+         let! _applyResponse = lspClient.WorkspaceApplyEdit edit
          return ()
       })
-
-    member x.FSharpDocumentationGenerator(p: TextDocumentPositionParams) =
-        logger.info (Log.setMessage "FSharpDocumentationGenerator Request: {parms}" >> Log.addContextDestructured "parms" p )
-
-        p |> x.positionHandler (fun p pos tyRes lineStr lines ->
-          match commands.SignatureData tyRes pos lineStr with
-          | CoreResponse.InfoRes msg | CoreResponse.ErrorRes msg ->
-              LspResult.internalError msg
-          | CoreResponse.Res (typ, parms, generics) ->
-              { Content =  CommandResponse.signatureData FsAutoComplete.JsonSerializer.writeJson (typ, parms, generics) }
-              |> success
-          |> async.Return
-        )
 
     member __.FSharpLineLense(p) = async {
         logger.info (Log.setMessage "FSharpLineLense Request: {parms}" >> Log.addContextDestructured "parms" p )
@@ -1926,7 +1865,7 @@ type FSharpLspServer(backgroundServiceEnabled: bool, state: State, lspClient: FS
 
 
     member private x.handleSemanticTokens(getTokens: Async<CoreResponse<option<(struct(FcsRange * SemanticClassificationType)) array>>>): AsyncLspResult<SemanticTokens option> = asyncResult {
-      match! getTokens |> AsyncResult.ofCoreResponse with
+      match! getTokens |> AsyncResult.ofCoreResponse |> AsyncResult.ofStringErr with
       | None ->
         return! LspResult.internalError "No highlights found"
       | Some rangesAndHighlights ->
@@ -1995,7 +1934,7 @@ let startCore backgroundServiceEnabled toolsPath workspaceLoaderFactory =
         defaultRequestHandlings<FSharpLspServer> ()
         |> Map.add "fsharp/signature" (requestHandling (fun s p -> s.FSharpSignature(p) ))
         |> Map.add "fsharp/signatureData" (requestHandling (fun s p -> s.FSharpSignatureData(p) ))
-        |> Map.add "fsharp/documentationGenerator" (requestHandling (fun s p -> s.FSharpGenerateXmlDocumentation(p) ))
+        |> Map.add "fsharp/documentationGenerator" (requestHandling (fun s p -> s.FSharpDocumentationGenerator(p) ))
         |> Map.add "fsharp/lineLens" (requestHandling (fun s p -> s.FSharpLineLense(p) ))
         |> Map.add "fsharp/compilerLocation" (requestHandling (fun s p -> s.FSharpCompilerLocation(p) ))
         |> Map.add "fsharp/workspaceLoad" (requestHandling (fun s p -> s.FSharpWorkspaceLoad(p) ))
