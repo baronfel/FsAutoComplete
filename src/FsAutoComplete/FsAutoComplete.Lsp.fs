@@ -1502,6 +1502,75 @@ type FSharpLspServer(backgroundServiceEnabled: bool, state: State, lspClient: FS
           |> async.Return
         )
 
+    member x.FSharpGenerateXmlDocumentation(p: TextDocumentPositionParams) =
+      p |> x.positionHandler (fun p pos tyRes lineStr lines -> asyncResult {
+         let trimmed = lineStr.TrimStart(' ')
+         let indentLength = lineStr.Length - trimmed.Length
+         let indentString = String.replicate indentLength " "
+         let! (typ, parameters, generics) = commands.SignatureData tyRes pos lineStr |> Result.ofCoreResponse
+         let summarySection = [
+           "/// <summary>"
+           "/// $1"
+           "/// </summary>"
+         ]
+         let parameterSection index (name, _type) = $"/// <param name=\"%s{name}\">$%d{index}</param>"
+         let genericArg index name = $"/// <typeparam name=\"'%s{name}\">$%d{index}</typeparam>"
+         let returnsSection index = [
+           "/// <returns>"
+           $"/// $%d{index}"
+           "/// </returns>"
+         ]
+         let formattedXmlDoc =
+           seq {
+              let mutable tabStopCount = 0
+              yield! summarySection
+              tabStopCount <- 2
+              match parameters with
+              | [] -> ()
+              | parameters ->
+                yield!
+                  parameters
+                  |> List.concat
+                  |> List.mapi (fun index parameter -> parameterSection (index + tabStopCount) parameter)
+              tabStopCount <- tabStopCount + parameters.Length
+              match generics with
+              | [] -> ()
+              | generics ->
+                yield!
+                  generics
+                  |> List.mapi (fun index generic -> genericArg (index + tabStopCount) generic)
+              tabStopCount <- tabStopCount + generics.Length
+              yield! returnsSection tabStopCount
+              yield Environment.NewLine // trailing newline so that we can insert on the position of the triggering line
+           }
+           |> Seq.map (fun s -> indentString + s)
+           |> String.concat Environment.NewLine
+
+         let insertPosition = { Line = p.Position.Line; Character = indentLength }
+         let edit: ApplyWorkspaceEditParams = {
+           Label = Some "Generate XML Documentation"
+           Edit = {
+             DocumentChanges = Some [|
+               {
+                 TextDocument = {
+                   Version = None
+                   Uri = p.TextDocument.Uri
+                 }
+                 Edits = [| {
+                     Range = { Start = insertPosition; End = insertPosition}
+                     NewText = formattedXmlDoc
+                   }
+                 |]
+               }
+             |]
+             Changes = None
+           }
+         }
+
+         let! applyResponse = lspClient.WorkspaceApplyEdit edit
+         return ()
+      })
+
     member x.FSharpDocumentationGenerator(p: TextDocumentPositionParams) =
         logger.info (Log.setMessage "FSharpDocumentationGenerator Request: {parms}" >> Log.addContextDestructured "parms" p )
 
@@ -1926,7 +1995,7 @@ let startCore backgroundServiceEnabled toolsPath workspaceLoaderFactory =
         defaultRequestHandlings<FSharpLspServer> ()
         |> Map.add "fsharp/signature" (requestHandling (fun s p -> s.FSharpSignature(p) ))
         |> Map.add "fsharp/signatureData" (requestHandling (fun s p -> s.FSharpSignatureData(p) ))
-        |> Map.add "fsharp/documentationGenerator" (requestHandling (fun s p -> s.FSharpDocumentationGenerator(p) ))
+        |> Map.add "fsharp/documentationGenerator" (requestHandling (fun s p -> s.FSharpGenerateXmlDocumentation(p) ))
         |> Map.add "fsharp/lineLens" (requestHandling (fun s p -> s.FSharpLineLense(p) ))
         |> Map.add "fsharp/compilerLocation" (requestHandling (fun s p -> s.FSharpCompilerLocation(p) ))
         |> Map.add "fsharp/workspaceLoad" (requestHandling (fun s p -> s.FSharpWorkspaceLoad(p) ))
