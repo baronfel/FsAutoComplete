@@ -29,112 +29,128 @@ open FSharp.Compiler.Syntax
 open FSharp.Compiler.Syntax.SyntaxTraversal
 
 type ParseAndCheckResults with
-  member x.TryGetPositionalUnionPattern (pos: FcsPos) =
-    let rec (|UnionNameAndPatterns|_|) = function
-      | SynPat.LongIdent (longDotId = ident; argPats = SynArgPats.Pats [SynPat.Paren (pat = singleDUFieldPattern; range = parenRange)]) -> Some (ident, [singleDUFieldPattern], parenRange)
-      | SynPat.LongIdent (longDotId = ident; argPats = SynArgPats.Pats [SynPat.Paren (pat = SynPat.Tuple(elementPats = duFieldPatterns); range = parenRange)]) -> Some (ident, duFieldPatterns, parenRange)
-      | SynPat.Paren (pat = UnionNameAndPatterns(ident, duFieldPatterns, parenRange)) -> Some (ident, duFieldPatterns, parenRange)
-      | SynPat.Paren (pat = UnionNameAndPatterns(ident, duFieldPatterns, parenRange)) -> Some (ident, duFieldPatterns, parenRange)
+  member x.TryGetPositionalUnionPattern(pos: FcsPos) =
+    let rec (|UnionNameAndPatterns|_|) =
+      function
+      | SynPat.LongIdent (longDotId = ident
+                          argPats = SynArgPats.Pats [ SynPat.Paren (pat = singleDUFieldPattern; range = parenRange) ]) ->
+        Some(ident, [ singleDUFieldPattern ], parenRange)
+      | SynPat.LongIdent (longDotId = ident
+                          argPats = SynArgPats.Pats [ SynPat.Paren (pat = SynPat.Tuple (elementPats = duFieldPatterns)
+                                                                    range = parenRange) ]) ->
+        Some(ident, duFieldPatterns, parenRange)
+      | SynPat.Paren(pat = UnionNameAndPatterns (ident, duFieldPatterns, parenRange)) ->
+        Some(ident, duFieldPatterns, parenRange)
+      | SynPat.Paren(pat = UnionNameAndPatterns (ident, duFieldPatterns, parenRange)) ->
+        Some(ident, duFieldPatterns, parenRange)
       | _ -> None
 
-    let visitor = {
-        new SyntaxVisitorBase<_>() with
+    let visitor =
+      { new SyntaxVisitorBase<_>() with
           member x.VisitBinding(path, defaultTraverse, binding) =
             match binding with
             // DU case with multiple
-            | SynBinding(headPat = UnionNameAndPatterns(ident, duFieldPatterns, parenRange)) -> Some (ident, duFieldPatterns, parenRange)
+            | SynBinding(headPat = UnionNameAndPatterns (ident, duFieldPatterns, parenRange)) ->
+              Some(ident, duFieldPatterns, parenRange)
             | _ -> defaultTraverse binding
 
           member x.VisitExpr(path, traverse, defaultTraverse, expr) =
             match expr with
-            | SynExpr.Match(expr = argExpr; clauses = clauses) ->
+            | SynExpr.Match (expr = argExpr; clauses = clauses) ->
               let path = SyntaxNode.SynExpr argExpr :: path
+
               match x.VisitExpr(path, traverse, defaultTraverse, argExpr) with
               | Some x -> Some x
               | None ->
                 clauses
-                |> List.tryPick ( function
-                  | SynMatchClause(pat = UnionNameAndPatterns(ident, duFieldPatterns, parenRange)) -> Some (ident, duFieldPatterns, parenRange)
-                  | _ -> None
-                )
+                |> List.tryPick (function
+                  | SynMatchClause(pat = UnionNameAndPatterns (ident, duFieldPatterns, parenRange)) ->
+                    Some(ident, duFieldPatterns, parenRange)
+                  | _ -> None)
             | _ -> defaultTraverse expr
 
           member x.VisitMatchClause(path, defaultTraverse, matchClause) =
             match matchClause with
-            | SynMatchClause(pat = UnionNameAndPatterns(ident, duFieldPatterns, parenRange)) -> Some (ident, duFieldPatterns, parenRange)
-            | _ -> defaultTraverse matchClause
-    }
+            | SynMatchClause(pat = UnionNameAndPatterns (ident, duFieldPatterns, parenRange)) ->
+              Some(ident, duFieldPatterns, parenRange)
+            | _ -> defaultTraverse matchClause }
+
     Traverse(pos, x.GetParseResults.ParseTree, visitor)
 
-let private (|MatchedFields|UnmatchedFields|NotEnoughFields|) (astFields: SynPat list, unionFields: string list ) =
+let private (|MatchedFields|UnmatchedFields|NotEnoughFields|) (astFields: SynPat list, unionFields: string list) =
   let userFieldsCount = astFields.Length
   let typeFieldsCount = unionFields.Length
+
   match compare userFieldsCount typeFieldsCount with
-  | -1 -> UnmatchedFields (List.zip astFields unionFields[0..userFieldsCount-1], unionFields.[userFieldsCount..])
-  | 0 -> MatchedFields (List.zip astFields unionFields)
+  | -1 -> UnmatchedFields(List.zip astFields unionFields[0 .. userFieldsCount - 1], unionFields.[userFieldsCount..])
+  | 0 -> MatchedFields(List.zip astFields unionFields)
   | 1 -> NotEnoughFields
   | _ -> failwith "impossible"
 
-let createEdit (astField: SynPat, duField: string): TextEdit list =
+let private createEdit (astField: SynPat, duField: string) : TextEdit list =
   let prefix = $"{duField} = "
   let startRange = astField.Range.Start |> fcsPosToProtocolRange
   let suffix = "; "
   let endRange = astField.Range.End |> fcsPosToProtocolRange
+
   [ { NewText = prefix; Range = startRange }
     { NewText = suffix; Range = endRange } ]
 
-let createWildCard endRange (duField: string): TextEdit =
+let private createWildCard endRange (duField: string) : TextEdit =
   let wildcard = $"{duField} = _; "
   let range = endRange
   { NewText = wildcard; Range = range }
 
-let fix (getParseResultsForFile: GetParseResultsForFile) (getRangeText: GetRangeText): CodeFix =
-  fun codeActionParams -> asyncResult {
-    let filePath =
-      codeActionParams.TextDocument.GetFilePath()
-      |> Utils.normalizePath
-    let fcsPos = protocolPosToPos codeActionParams.Range.Start
-    let! (parseAndCheck, lineStr, sourceText) = getParseResultsForFile filePath fcsPos
-    match parseAndCheck.TryGetPositionalUnionPattern(fcsPos) with
-    | Some (duIdent, duFields, parenRange) ->
-      match parseAndCheck.TryGetSymbolUse duIdent.Range.Start lineStr with
-      | Some symbolUse ->
+let fix (getParseResultsForFile: GetParseResultsForFile) (getRangeText: GetRangeText) : CodeFix =
+  fun codeActionParams ->
+    asyncResult {
+      let filePath =
+        codeActionParams.TextDocument.GetFilePath()
+        |> Utils.normalizePath
+
+      let fcsPos = protocolPosToPos codeActionParams.Range.Start
+      let! (parseAndCheck, lineStr, sourceText) = getParseResultsForFile filePath fcsPos
+
+      let! (duIdent, duFields, parenRange) =
+        parseAndCheck.TryGetPositionalUnionPattern(fcsPos)
+        |> Result.ofOption (fun _ -> "Not inside a DU pattern")
+
+      let! symbolUse =
+        parseAndCheck.TryGetSymbolUse duIdent.Range.Start lineStr
+        |> Result.ofOption (fun _ -> "No matching symbol for position")
+
+      let! unionCase =
         match symbolUse.Symbol with
-        | :? FSharpUnionCase as uc ->
-          match (duFields, uc.Fields |> List.ofSeq |> List.map (fun f -> f.Name)) with
-          | MatchedFields pairs ->
-            let edits =
-              pairs
-              |> List.collect createEdit
-              |> List.toArray
-            return [{
-              Edits = edits
+        | :? FSharpUnionCase as uc -> Ok uc
+        | _ -> Error "Not a union case"
+
+      let edits =
+        match (duFields,
+               unionCase.Fields
+               |> List.ofSeq
+               |> List.map (fun f -> f.Name))
+          with
+        | MatchedFields pairs -> pairs |> List.collect createEdit |> List.toArray
+
+        | UnmatchedFields (pairs, leftover) ->
+          let endPos =
+            dec sourceText (fcsPosToLsp parenRange.End)
+            |> protocolPosToRange
+
+          let matchedEdits = pairs |> List.collect createEdit
+          let leftoverEdits = leftover |> List.map (createWildCard endPos)
+
+          List.append matchedEdits leftoverEdits
+          |> List.toArray
+        | NotEnoughFields -> [||]
+
+      match edits with
+      | [||] -> return []
+      | edits ->
+        return
+          [ { Edits = edits
               File = codeActionParams.TextDocument
               Title = "Convert to named patterns"
               SourceDiagnostic = None
-              Kind = FixKind.Refactor
-            }]
-
-          | UnmatchedFields (pairs, leftover) ->
-            let endPos = dec sourceText (fcsPosToLsp parenRange.End) |> protocolPosToRange
-            let matchedEdits =
-              pairs
-              |> List.collect createEdit
-            let leftoverEdits =
-              leftover
-              |> List.map (createWildCard endPos)
-
-            let edits = List.append matchedEdits leftoverEdits |> List.toArray
-            return [{
-              Edits = edits
-              File = codeActionParams.TextDocument
-              Title = "Convert to named patterns"
-              SourceDiagnostic = None
-              Kind = FixKind.Refactor
-            }]
-          | NotEnoughFields -> return []
-        | _ -> return []
-      | None -> return []
-    | None ->
-      return []
-  }
+              Kind = FixKind.Refactor } ]
+    }
