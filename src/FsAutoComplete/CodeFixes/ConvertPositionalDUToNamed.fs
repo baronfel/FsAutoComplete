@@ -124,12 +124,13 @@ let fix (getParseResultsForFile: GetParseResultsForFile) (getRangeText: GetRange
         | :? FSharpUnionCase as uc -> Ok uc
         | _ -> Error "Not a union case"
 
+      let allFieldNames =
+        unionCase.Fields
+        |> List.ofSeq
+        |> List.map (fun f -> f.Name)
+
       let edits =
-        match (duFields,
-               unionCase.Fields
-               |> List.ofSeq
-               |> List.map (fun f -> f.Name))
-          with
+        match (duFields, allFieldNames) with
         | MatchedFields pairs -> pairs |> List.collect createEdit |> List.toArray
 
         | UnmatchedFields (pairs, leftover) ->
