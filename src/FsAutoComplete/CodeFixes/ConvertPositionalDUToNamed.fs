@@ -54,6 +54,7 @@ type ParseAndCheckResults with
               Some(ident, duFieldPatterns, parenRange)
             | _ -> defaultTraverse binding
 
+          // I shouldn't have to override my own VisitExpr, but the default traversal doesn't seem to be triggering the `VisitMatchClause` method I've defined below.
           member x.VisitExpr(path, traverse, defaultTraverse, expr) =
             match expr with
             | SynExpr.Match (expr = argExpr; clauses = clauses) ->
