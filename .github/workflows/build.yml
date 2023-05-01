@@ -79,7 +79,7 @@ jobs:
       run: dotnet tool restore
 
     - name: Check format
-      run: dotnet build -t:CheckFormat
+      run: dotnet build -t:CheckFormat /tl
 
     - name: Run Build
       run: dotnet run --project build -t Build
