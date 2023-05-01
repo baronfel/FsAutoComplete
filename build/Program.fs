@@ -94,12 +94,12 @@ let init args =
 
   Target.create "Clean" (fun _ -> Shell.cleanDirs [ buildDir; buildReleaseDir; pkgsDir ])
 
-  Target.create "Restore" (fun _ -> DotNet.restore id "")
-
   Target.create "Build" (fun _ ->
-    DotNet.build
-      (fun p -> { p with Configuration = DotNet.BuildConfiguration.fromString configuration })
-      "FsAutoComplete.sln")
+    DotNet.exec id "build" "-c Release FsAutoComplete.sln"
+    |> fun r ->
+         if not r.OK then
+           failwithf "Errors while building: %A" r.Errors
+  )
 
   Target.create "EnsureRepoConfig" (fun _ ->
     // Configure custom git hooks
@@ -172,8 +172,6 @@ let init args =
 
   "PromoteUnreleasedToVersion" ==> "CreateVersionTag" ==> "Promote"
   |> ignore<string>
-
-  "Restore" ==> "Build" |> ignore<string>
 
   "Build" ==> "LspTest" ==> "Coverage" ==> "Test" ==> "All"
   |> ignore<string>
