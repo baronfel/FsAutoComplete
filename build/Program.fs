@@ -95,7 +95,7 @@ let init args =
   Target.create "Clean" (fun _ -> Shell.cleanDirs [ buildDir; buildReleaseDir; pkgsDir ])
 
   Target.create "Build" (fun _ ->
-    DotNet.exec id "build" "-c Release FsAutoComplete.sln /tl"
+    DotNet.exec id "build" "-c Release FsAutoComplete.sln"
     |> fun r ->
          if not r.OK then
            failwithf "Errors while building: %A" r.Errors
