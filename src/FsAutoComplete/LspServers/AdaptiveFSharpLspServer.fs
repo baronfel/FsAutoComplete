@@ -259,7 +259,7 @@ type AdaptiveFSharpLspServer
         return! returnException e logCfg
     }
 
-  member __.ScriptFileProjectOptions = state.ScriptFileProjectOptions.Publish
+  member __.ScriptFileProjectOptions = state.ScriptFileProject.Publish
 
   member private x.logUnimplementedRequest<'t, 'u>
     (
@@ -1193,7 +1193,7 @@ type AdaptiveFSharpLspServer
             >> Log.addContextDestructured "params" p
           )
 
-          let getProjectOptions file = state.GetProjectOptionsForFile file |> AsyncResult.bimap id failwith //? Should we fail here?
+          let getProjectOptions file = state.GetProjectForFile file |> AsyncResult.bimap id failwith //? Should we fail here?
 
           let getUsesOfSymbol (filePath, opts: _ list, symbol: FSharpSymbol) =
             state.GetUsesOfSymbol(filePath, opts, symbol)
@@ -1201,7 +1201,7 @@ type AdaptiveFSharpLspServer
           let getAllProjects () =
             state.GetFilesToProject()
             |> Async.map (
-              Array.map (fun (file, proj) -> UMX.untag file, proj.FSharpProjectOptions)
+              Array.map (fun (file, proj) -> UMX.untag file, proj.FSharpProject)
               >> Array.toList
             )
 

@@ -5,18 +5,19 @@ open FSharp.Compiler.CodeAnalysis
 open System.IO
 open FSharp.UMX
 open FsToolkit.ErrorHandling
+open FSharp.Compiler.CodeAnalysis.ProjectSnapshot
 
 [<RequireQualifiedAccess; NoComparison>]
 type SymbolDeclarationLocation =
   | CurrentDocument
-  | Projects of FSharpProjectOptions list * isLocalForProject: bool
+  | Projects of FSharpProjectSnapshot list * isLocalForProject: bool
 
 let getDeclarationLocation
   (
     symbolUse: FSharpSymbolUse,
     currentDocument: IFSACSourceText,
     getProjectOptions,
-    projectsThatContainFile: string<LocalPath> -> Async<FSharpProjectOptions list>,
+    projectsThatContainFile: string<LocalPath> -> Async<FSharpProjectSnapshot list>,
     getDependentProjectsOfProjects
   // state: State
   ) : Async<Option<SymbolDeclarationLocation>> =

@@ -19,6 +19,10 @@ module ProjInfoExtensions =
 
     member ProjectFilePath: string option
 
+  type ProjectSnapshot.FSharpReferencedProjectSnapshot with
+
+    member ProjectFilePath: string option
+
   type FSharpProjectOptions with
 
     member OutputDll: string

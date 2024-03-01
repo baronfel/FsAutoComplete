@@ -34,7 +34,7 @@ module Types =
   type GetLanguageVersion = string<LocalPath> -> Async<LanguageVersionShim>
 
   type GetProjectOptionsForFile =
-    string<LocalPath> -> Async<ResultOrString<FSharp.Compiler.CodeAnalysis.FSharpProjectOptions>>
+    string<LocalPath> -> Async<ResultOrString<FSharp.Compiler.CodeAnalysis.ProjectSnapshot.FSharpProjectSnapshot>>
 
   [<RequireQualifiedAccess>]
   type FixKind =

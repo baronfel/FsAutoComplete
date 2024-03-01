@@ -96,7 +96,7 @@ type IFSACSourceText =
   abstract member WalkBackwards:
     position: Position * terminal: (char -> bool) * condition: (char -> bool) -> option<Position>
 
-  inherit ISourceText
+  inherit ISourceTextNew
 
 type ISourceTextFactory =
   abstract member Create: fileName: string<LocalPath> * text: string -> IFSACSourceText

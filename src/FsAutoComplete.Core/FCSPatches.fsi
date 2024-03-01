@@ -22,9 +22,8 @@ module LanguageVersionShim =
   val defaultLanguageVersion: Lazy<LanguageVersionShim>
 
   /// <summary>Tries to parse out "--langversion:" from OtherOptions if it can't find it, returns defaultLanguageVersion</summary>
-  /// <param name="fpo">The FSharpProjectOptions to use</param>
   /// <returns>A LanguageVersionShim from the parsed "--langversion:" or defaultLanguageVersion </returns>
-  val fromFSharpProjectOptions: fpo: FSharpProjectOptions -> LanguageVersionShim
+  val fromFSharpProject: snapshot: FSharpProjectSnapshot -> LanguageVersionShim
 
 module SyntaxTreeOps =
   val synExprContainsError: SynExpr -> bool

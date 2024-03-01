@@ -12,6 +12,7 @@ open FSharp.Compiler.Syntax
 open FSharp.Compiler.CodeAnalysis
 open FsToolkit.ErrorHandling
 open FCSPatches
+open FSharp.Compiler.CodeAnalysis.ProjectSnapshot
 
 [<AutoOpen>]
 module ProjInfoExtensions =
@@ -21,6 +22,13 @@ module ProjInfoExtensions =
     member x.ProjectFilePath =
       match x with
       | FSharpReferencedProject.FSharpReference(options = options) -> options.ProjectFileName |> Some
+      | _ -> None
+
+  type FSharpReferencedProjectSnapshot with
+
+    member x.ProjectFilePath =
+      match x with
+      | FSharpReferencedProjectSnapshot.FSharpReference(snapshot = snapshot) -> snapshot.ProjectFileName |> Some
       | _ -> None
 
   type FSharpProjectOptions with
