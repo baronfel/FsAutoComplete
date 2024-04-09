@@ -279,6 +279,8 @@ module Tracing =
   val fsacActivitySource: ActivitySource
   val recordException: e: exn -> trace: Activity -> unit
 
+  val fsacMeter: System.Diagnostics.Metrics.Meter
+
   /// <summary>
   /// StreamJsonRpcTracingStrategy participates in and propagates trace context in  vs-streamjsonrpc
   /// </summary>

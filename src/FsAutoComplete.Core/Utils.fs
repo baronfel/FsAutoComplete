@@ -842,8 +842,9 @@ module Tracing =
   /// </remarks>
   [<Literal>]
   let fscServiceName = "fsc"
-
   let fsacActivitySource = new ActivitySource(serviceName, Version.info().Version)
+
+  let fsacMeter = new Metrics.Meter(serviceName, Version.info().Version)
 
   let recordException (e: exn) (trace: Activity) =
     trace.SetStatusErrorSafe(e.Message).RecordExceptions(e) |> ignore<Activity>

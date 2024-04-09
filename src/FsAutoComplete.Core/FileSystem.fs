@@ -390,17 +390,21 @@ type ISourceTextFactory =
   abstract member Create: fileName: string<LocalPath> * stream: Stream -> CancellableValueTask<IFSACSourceText>
 
 type RoslynSourceTextFactory() =
+  let meter = FsAutoComplete.Utils.Tracing.fsacMeter.CreateCounter<int>("SourceTexts.Created", "files", "Number of SourceTexts created")
+
   interface ISourceTextFactory with
     member this.Create(fileName: string<LocalPath>, text: string) : IFSACSourceText =
       // This uses a TextReader because the TextReader overload https://github.com/dotnet/roslyn/blob/6df76ec8b109c9460f7abccc3a310c7cdbd2975e/src/Compilers/Core/Portable/Text/SourceText.cs#L120-L139
       // attempts to use the LargeText implementation for large strings. While the string is already allocated, if using CONSERVE_MEMORY, it should be cleaned up and compacted eventually.
       use t = new StringReader(text)
+      meter.Add 1
       RoslynSourceText.RoslynSourceTextFile(fileName, (Microsoft.CodeAnalysis.Text.SourceText.From(t, text.Length)))
 
     member this.Create(fileName: string<LocalPath>, stream: Stream) : CancellableValueTask<IFSACSourceText> =
       fun ct ->
         ct.ThrowIfCancellationRequested()
         // Maybe one day we'll have an async version for streams: https://github.com/dotnet/roslyn/issues/61489
+        meter.Add 1
         RoslynSourceText.RoslynSourceTextFile(fileName, (Microsoft.CodeAnalysis.Text.SourceText.From(stream)))
         :> IFSACSourceText
         |> ValueTask.FromResult
@@ -437,6 +441,9 @@ type VolatileFile =
       LastTouched = touched }
 
 type FileSystem(actualFs: IFileSystem, tryFindFile: string<LocalPath> -> VolatileFile option) =
+  let hits = Tracing.fsacMeter.CreateCounter<int>("FileSystem.Hits", "files", "Number of files found in the cache")
+  let misses = Tracing.fsacMeter.CreateCounter<int>("FileSystem.Misses", "files", "Number of files not found in the cache")
+
   let fsLogger = LogProvider.getLoggerByName "FileSystem"
 
   let getContent (filename: string<LocalPath>) =
@@ -449,6 +456,8 @@ type FileSystem(actualFs: IFileSystem, tryFindFile: string<LocalPath> -> Volatil
         >> Log.addContext "path" filename
         >> Log.addContext "hash" (file.Source.GetHashCode())
       )
+
+      hits.Add 1
 
       file.Source.ToString() |> System.Text.Encoding.UTF8.GetBytes)
 
@@ -498,8 +507,14 @@ type FileSystem(actualFs: IFileSystem, tryFindFile: string<LocalPath> -> Volatil
         filename
         |> Utils.normalizePath
         |> tryFindFile
-        |> Option.map (fun f -> f.LastTouched)
-        |> Option.defaultWith (fun () -> actualFs.GetLastWriteTimeShim filename)
+        |> Option.map (fun f ->
+          hits.Add 1
+          f.LastTouched
+        )
+        |> Option.defaultWith (fun () ->
+          misses.Add 1
+          actualFs.GetLastWriteTimeShim filename
+        )
 
       // fsLogger.debug (
       //   Log.setMessage "GetLastWriteTimeShim of `{path}` - {date} "
@@ -530,8 +545,11 @@ type FileSystem(actualFs: IFileSystem, tryFindFile: string<LocalPath> -> Volatil
       filePath
       |> Utils.normalizePath
       |> getContent
-      |> Option.map (fun bytes -> new MemoryStream(bytes) :> Stream)
+      |> Option.map (fun bytes ->
+        new MemoryStream(bytes) :> Stream
+      )
       |> Option.defaultWith (fun _ ->
+        misses.Add 1
         actualFs.OpenFileForReadShim(
           filePath,
           ?useMemoryMappedFile = useMemoryMappedFile,

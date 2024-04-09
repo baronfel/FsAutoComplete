@@ -35,6 +35,7 @@ open System.Threading.Tasks
 open FsAutoComplete.FCSPatches
 open FsAutoComplete.Lsp
 open FsAutoComplete.Lsp.Helpers
+open FSharp.Data.Adaptive
 
 
 [<RequireQualifiedAccess>]
@@ -85,6 +86,20 @@ type FindFirstProject() =
 
 type AdaptiveState(lspClient: FSharpLspClient, sourceTextFactory: ISourceTextFactory, workspaceLoader: IWorkspaceLoader)
   =
+
+  let analyzerLoadSettings = cval<FSharp.Analyzers.SDK.AssemblyLoadStats option> Unchecked.defaultof<_>
+  let _analyzerCounter = FsAutoComplete.Utils.Tracing.fsacMeter.CreateObservableGauge<int>(
+    "fsac.analyzers.count",
+    observeValue = (fun () -> match analyzerLoadSettings.Value with | None -> 0 | Some s -> s.Analyzers),
+    description = "Number of analyzers loaded by the analyzers SDK"
+  )
+
+  let _testsFoundCounter = FsAutoComplete.Utils.Tracing.fsacMeter.CreateObservableGauge<int>(
+    "fsac.tests.count",
+    observeValue = (fun () -> 0),
+    description = "Number of tests found by the test detection system"
+  )
+
   let logger = LogProvider.getLoggerFor<AdaptiveState> ()
   let thisType = typeof<AdaptiveState>
   let disposables = new Disposables.CompositeDisposable()
@@ -109,7 +124,6 @@ type AdaptiveState(lspClient: FSharpLspClient, sourceTextFactory: ISourceTextFac
 
       return config, checker, rootPath
     }
-
 
   let mutable traceNotifications: ProgressListener option = None
 
@@ -182,6 +196,7 @@ type AdaptiveState(lspClient: FSharpLspClient, sourceTextFactory: ISourceTextFac
 
           Loggers.analyzers.info (Log.setMessageI $"Loading analyzers from {dir:dir}")
           let assemblyLoadStats = analyzersClient.LoadAnalyzers(dir, excludeInclude)
+          transact(fun () -> analyzerLoadSettings.Value <- Some(assemblyLoadStats))
 
           Loggers.analyzers.info (
             Log.setMessageI
@@ -219,8 +234,6 @@ type AdaptiveState(lspClient: FSharpLspClient, sourceTextFactory: ISourceTextFac
       if fi.Exists && (fi.Name = "dotnet" || fi.Name = "dotnet.exe") then
         checker.SetDotnetRoot(fi, defaultArg rootPath System.Environment.CurrentDirectory |> DirectoryInfo)
 
-
-
   // Syncs config changes to the mutable world
   do
     AVal.Observable.onValueChangedWeak configChanges
@@ -234,7 +247,6 @@ type AdaptiveState(lspClient: FSharpLspClient, sourceTextFactory: ISourceTextFac
       setDotnetRoot checker config.DotNetRoot rootPath)
     |> disposables.Add
 
-
   let tfmConfig =
     config
     |> AVal.map (fun c ->
@@ -242,8 +254,6 @@ type AdaptiveState(lspClient: FSharpLspClient, sourceTextFactory: ISourceTextFac
         FSIRefs.TFM.NetCore
       else
         FSIRefs.TFM.NetFx)
-
-
   let sendDiagnostics (uri: DocumentUri) (diags: Diagnostic[]) =
     logger.info (Log.setMessageI $"SendDiag for {uri:file}: {diags.Length:diags} entries")
 
