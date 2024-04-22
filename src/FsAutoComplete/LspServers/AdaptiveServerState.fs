@@ -980,6 +980,11 @@ type AdaptiveState(lspClient: FSharpLspClient, sourceTextFactory: ISourceTextFac
   let openFiles = cmap<string<LocalPath>, cval<VolatileFile>> ()
   let openFilesReadOnly = openFiles |> AMap.map (fun _ x -> x :> aval<_>)
 
+  let _openFilesCounter = FsAutoComplete.Utils.Tracing.fsacMeter.CreateObservableGauge("fsac.files.open",
+    observeValue = (fun () -> openFiles.Count),
+    description = "Number of open files in the F# Language Server"
+  )
+
   let textChanges =
     cmap<string<LocalPath>, cset<DidChangeTextDocumentParams * DateTime>> ()
 
